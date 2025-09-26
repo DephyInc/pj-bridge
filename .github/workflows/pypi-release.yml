@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment:
       name: pypi
-      url: https://pypi.org/p/pj-bridge   # optional
+      url: https://pypi.org/p/pj-bridge
     permissions:
       id-token: write    # OIDC
       contents: read
@@ -68,4 +68,3 @@ jobs:
         uses: pypa/gh-action-pypi-publish@v1.13.0
         with:
           packages-dir: dist
-          # attestations: true   # default with OIDC; uncomment to be explicit
