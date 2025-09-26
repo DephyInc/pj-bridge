@@ -25,22 +25,27 @@ Examples:
 Notes:
   - Prints one JSON per line to stdout (NDJSON). Flushes by default unless --no-flush.
   - Reconnects on TCP errors.
-  - If your device struct is not packed, add packing on the device or extend the fmt with explicit padding.
+  - If your device struct is not packed, add packing on the device or extend the fmt
+    with explicit padding.
 """
 
 import argparse
 import json
+import logging
 import socket
 import struct
 import sys
 import time
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
 # Import derive_struct from sibling module
 try:
-    from derive_struct import derive_struct  # type: ignore
+    from derive_struct import derive_struct
 except Exception:
-    print("error: could not import derive_struct. Ensure derive_struct.py is in the same repo.", file=sys.stderr)
+    print(
+        "error: could not import derive_struct.",
+        file=sys.stderr,
+    )
     raise
 
 
@@ -55,6 +60,7 @@ def parse_hex_u32(s: str) -> bytes:
 
 
 def connect_tcp(host: str, port: int, retry_sec: float, recv_buf: int) -> socket.socket:
+    log = logging.getLogger("pj_bridge")
     while True:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -64,8 +70,8 @@ def connect_tcp(host: str, port: int, retry_sec: float, recv_buf: int) -> socket
             if recv_buf > 0:
                 try:
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, recv_buf)
-                except Exception:
-                    pass
+                except OSError as e:
+                    log.debug("SO_RCVBUF not applied: %s", e)
             print(f"[TCP] connected to {host}:{port}", file=sys.stderr)
             return s
         except Exception as e:
@@ -77,7 +83,7 @@ class DelimitedRecordParser:
     """
     Parses a stream framed by a 4-byte delimiter.
     Two modes:
-      - counted batches: [DELIM][COUNT][PAYLOAD]*COUNT  (this is your current device format)
+      - counted batches: [DELIM][COUNT][PAYLOAD]*COUNT
       - single payload:  [DELIM][PAYLOAD]               (fallback if --no-counted-batch)
 
     DELIM is typically 0xDEADBEEF.
@@ -116,7 +122,7 @@ class DelimitedRecordParser:
         if self.ts_field:
             try:
                 t_val = float(data[self.ts_field]) * self.ts_scale
-            except Exception:
+            except (KeyError, TypeError, ValueError):
                 t_val = time.time()
         else:
             t_val = time.time()
@@ -137,6 +143,7 @@ class DelimitedRecordParser:
         msgs: List[str] = []
         d = self.delim
         dlen = len(d)
+        log = logging.getLogger("pj_bridge")
 
         i = 0
         blen = len(buf)
@@ -165,6 +172,11 @@ class DelimitedRecordParser:
                 if count > self.max_frames_per_batch:
                     # Likely noise or corruption; skip this delimiter
                     # Move forward by 1 to rescan for next delimiter
+                    log.debug(
+                        "batch count %d > max_frames_per_batch %d; skipping",
+                        count,
+                        self.max_frames_per_batch,
+                    )
                     i = pos + 1
                     continue
 
@@ -182,9 +194,9 @@ class DelimitedRecordParser:
                     payload = buf[offset : offset + self.rec_size]
                     try:
                         msgs.append(self._decode_payload_to_json(payload))
-                    except Exception:
-                        # Skip malformed record and try to keep going
-                        pass
+                    except (struct.error, ValueError) as e:
+                        # Skip malformed record and continue batch
+                        log.debug("malformed record skipped: %s", e)
                     offset += self.rec_size
 
                 # Advance i past the whole batch
@@ -200,8 +212,8 @@ class DelimitedRecordParser:
                     payload = buf[start_payload:end_payload]
                     try:
                         msgs.append(self._decode_payload_to_json(payload))
-                    except Exception:
-                        pass
+                    except (struct.error, ValueError) as e:
+                        log.debug("malformed record skipped: %s", e)
                     i = end_payload
                     continue
                 else:
@@ -231,7 +243,8 @@ def run(args):
     )
 
     leftover = b""
-    flush = (not args.no_flush)
+    flush = not args.no_flush
+    log = logging.getLogger("pj_bridge")
 
     while True:
         s = connect_tcp(args.host, args.port, args.retry_sec, args.recv_bytes)
@@ -251,14 +264,17 @@ def run(args):
             print(f"[TCP] error: {e}. reconnecting...", file=sys.stderr)
             try:
                 s.close()
-            except Exception:
-                pass
+            except OSError as e_close:
+                log.debug("socket close failed: %s", e_close)
+            except Exception as e_close:
+                log.warning("unexpected error on socket close: %s", e_close)
             time.sleep(args.retry_sec)
 
 
 def parse_args():
     ap = argparse.ArgumentParser(
-        description="Parse a delimiter + count framed TCP binary stream into JSON (NDJSON to stdout)."
+        description="Parse a delimiter + count framed TCP binary stream into JSON "
+        + "(NDJSON to stdout)."
     )
 
     # TCP (short flags)
@@ -269,10 +285,18 @@ def parse_args():
 
     # Framing
     ap.add_argument("--delimiter", default="0xDEADBEEF", help="4-byte delimiter in hex")
-    ap.add_argument("--no-counted-batch", action="store_true",
-                    help="Disable [DELIM][COUNT][PAYLOAD]*COUNT parsing; use single [DELIM][PAYLOAD] mode")
-    ap.add_argument("--max-frames-per-batch", type=int, default=64,
-                    help="Sanity cap for COUNT to ignore corrupted batches")
+    ap.add_argument(
+        "--no-counted-batch",
+        action="store_true",
+        help="Disable [DELIM][COUNT][PAYLOAD]*COUNT parsing; "
+        + "use single [DELIM][PAYLOAD] mode",
+    )
+    ap.add_argument(
+        "--max-frames-per-batch",
+        type=int,
+        default=64,
+        help="Sanity cap for COUNT to ignore corrupted batches",
+    )
 
     # Struct derivation
     ap.add_argument("--struct-header", required=True, help="Path to C header")
@@ -286,17 +310,36 @@ def parse_args():
     )
 
     # Timestamp and naming
-    ap.add_argument("--ts-field", default=None, help="Field with device time (e.g. ts_ms)")
-    ap.add_argument("--ts-scale", type=float, default=1e-3, help="Scale device time to seconds (ms default)")
-    ap.add_argument("--name-prefix", default=None, help="Optional prefix, e.g. 'device_a.'")
+    ap.add_argument(
+        "--ts-field", default=None, help="Field with device time (e.g. ts_ms)"
+    )
+    ap.add_argument(
+        "--ts-scale",
+        type=float,
+        default=1e-3,
+        help="Scale device time to seconds (ms default)",
+    )
+    ap.add_argument(
+        "--name-prefix", default=None, help="Optional prefix, e.g. 'device_a.'"
+    )
 
     # Output
-    ap.add_argument("--no-flush", action="store_true", help="Do not flush stdout on each line")
+    ap.add_argument(
+        "--no-flush", action="store_true", help="Do not flush stdout on each line"
+    )
 
     return ap.parse_args()
 
 
+def _setup_logging():
+    logging.basicConfig(
+        level=logging.INFO,  # change to DEBUG to see skipped-record details
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
 def main():
+    _setup_logging()
     try:
         run(parse_args())
     except KeyboardInterrupt:

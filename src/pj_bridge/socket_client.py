@@ -25,7 +25,9 @@ except ImportError:
     sys.exit(1)
 
 
-async def producer(input_path: Optional[str], q: asyncio.Queue, validate: bool, strip: bool):
+async def producer(
+    input_path: Optional[str], q: asyncio.Queue, validate: bool, strip: bool
+):
     """
     Read NDJSON lines from stdin or a file and enqueue them.
     """
@@ -45,7 +47,10 @@ async def producer(input_path: Optional[str], q: asyncio.Queue, validate: bool, 
                     _ = json.loads(line)
                 except Exception:
                     # Skip invalid lines but keep going
-                    print(f"[socket_client] skipped invalid JSON: {line[:120]}", file=sys.stderr)
+                    print(
+                        f"[socket_client] skipped invalid JSON: {line[:120]}",
+                        file=sys.stderr,
+                    )
                     continue
             # backpressure control
             if q.qsize() > 10000:
@@ -65,12 +70,12 @@ async def producer(input_path: Optional[str], q: asyncio.Queue, validate: bool, 
     await q.put(None)
 
 
-async def ws_sender(ws_url: str, q: asyncio.Queue, retry_sec: float):
+async def ws_sender(ws_url: str, q: asyncio.Queue[str], retry_sec: float) -> None:
     """
     Connect to PlotJuggler WS server and forward queued messages.
     Reconnect on failure. Stops when producer sends None.
     """
-    pending = []
+    pending: list[str] = []
     while True:
         try:
             async with websockets.connect(ws_url, max_queue=None) as ws:
@@ -90,7 +95,10 @@ async def ws_sender(ws_url: str, q: asyncio.Queue, retry_sec: float):
                         pending.append(item)
                         raise e
         except Exception as e:
-            print(f"[socket_client] WS error: {e}. reconnect in {retry_sec}s", file=sys.stderr)
+            print(
+                f"[socket_client] WS error: {e}. reconnect in {retry_sec}s",
+                file=sys.stderr,
+            )
             await asyncio.sleep(retry_sec)
 
 
@@ -98,22 +106,31 @@ def parse_args():
     ap = argparse.ArgumentParser(
         description="Forward NDJSON lines to PlotJuggler WebSocket Server."
     )
-    ap.add_argument("--ws-url", default="ws://127.0.0.1:9871",
-                    help="PlotJuggler WebSocket Server URL (default ws://127.0.0.1:9871)")
-    ap.add_argument("--input", default="-",
-                    help="NDJSON input file. Use '-' for stdin (default)")
-    ap.add_argument("--retry-sec", type=float, default=2.0,
-                    help="Reconnect delay on WS errors")
-    ap.add_argument("--no-validate", action="store_true",
-                    help="Do not JSON-validate each line")
-    ap.add_argument("--no-strip", action="store_true",
-                    help="Do not strip whitespace; keep lines verbatim")
+    ap.add_argument(
+        "--ws-url",
+        default="ws://127.0.0.1:9871",
+        help="PlotJuggler WebSocket Server URL (default ws://127.0.0.1:9871)",
+    )
+    ap.add_argument(
+        "--input", default="-", help="NDJSON input file. Use '-' for stdin (default)"
+    )
+    ap.add_argument(
+        "--retry-sec", type=float, default=2.0, help="Reconnect delay on WS errors"
+    )
+    ap.add_argument(
+        "--no-validate", action="store_true", help="Do not JSON-validate each line"
+    )
+    ap.add_argument(
+        "--no-strip",
+        action="store_true",
+        help="Do not strip whitespace; keep lines verbatim",
+    )
     return ap.parse_args()
 
 
 async def main_async():
     args = parse_args()
-    q: asyncio.Queue = asyncio.Queue(maxsize=20000)
+    q: asyncio.Queue[str] = asyncio.Queue(maxsize=20000)
     tasks = [
         asyncio.create_task(
             producer(

@@ -30,26 +30,32 @@ Example:
 
 import argparse
 import asyncio
+import logging
 import socket
 import sys
-from typing import Optional, List, Tuple
 
 # Local deps
 try:
-    from derive_struct import derive_struct  # type: ignore
-except Exception as e:
-    print("error: could not import derive_struct. Ensure derive_struct.py is present.", file=sys.stderr)
+    from derive_struct import derive_struct
+except Exception:
+    print(
+        "error: could not import derive_struct. Ensure derive_struct.py is present.",
+        file=sys.stderr,
+    )
     raise
 
 try:
-    from tcp_parser import DelimitedRecordParser, parse_hex_u32, connect_tcp  # type: ignore
-except Exception as e:
-    print("error: could not import from tcp_parser. Ensure tcp_parser.py is present.", file=sys.stderr)
+    from tcp_parser import DelimitedRecordParser, connect_tcp, parse_hex_u32
+except Exception:
+    print(
+        "error: could not import from tcp_parser. Ensure tcp_parser.py is present.",
+        file=sys.stderr,
+    )
     raise
 
 try:
-    from socket_client import ws_sender  # type: ignore
-except Exception as e:
+    from socket_client import ws_sender
+except Exception:
     print("error: could not import ws_sender from socket_client.py.", file=sys.stderr)
     raise
 
@@ -89,18 +95,23 @@ async def tcp_reader_to_queue(
                         await q.put(m)
                 except socket.timeout:
                     continue
-        except Exception as e:
+        except Exception:
             try:
                 s.close()
-            except Exception:
-                pass
-            print(f"[bridge] TCP error: {e}. reconnect in {retry_sec}s", file=sys.stderr)
+            except OSError as e:
+                logging.getLogger("pj_bridge").debug("socket close failed: %s", e)
+            except Exception as e:
+                logging.getLogger("pj_bridge").warning(
+                    "unexpected error on socket close: %s", e
+                )
+
             await asyncio.sleep(retry_sec)
 
 
 def parse_args():
     ap = argparse.ArgumentParser(
-        description="Bridge a delimiter+count framed TCP binary stream to PlotJuggler via WebSocket JSON (single process)."
+        description="Bridge a delimiter+count framed TCP binary stream to PlotJuggler"
+        + " via WebSocket JSON."
     )
 
     # Device TCP (short flags)
@@ -111,10 +122,18 @@ def parse_args():
 
     # Framing
     ap.add_argument("--delimiter", default="0xDEADBEEF", help="4-byte delimiter in hex")
-    ap.add_argument("--no-counted-batch", action="store_true",
-                    help="Disable [DELIM][COUNT][PAYLOAD]*COUNT parsing; use single [DELIM][PAYLOAD] mode")
-    ap.add_argument("--max-frames-per-batch", type=int, default=64,
-                    help="Sanity cap for COUNT to ignore corrupted batches")
+    ap.add_argument(
+        "--no-counted-batch",
+        action="store_true",
+        help="Disable [DELIM][COUNT][PAYLOAD]*COUNT parsing; "
+        + "use single [DELIM][PAYLOAD] mode",
+    )
+    ap.add_argument(
+        "--max-frames-per-batch",
+        type=int,
+        default=64,
+        help="Sanity cap for COUNT to ignore corrupted batches",
+    )
 
     # Struct derivation
     ap.add_argument("--struct-header", required=True, help="Path to C header")
@@ -128,13 +147,22 @@ def parse_args():
     )
 
     # Timestamp and naming
-    ap.add_argument("--ts-field", default=None, help="Field with device time (e.g. ts_ms)")
-    ap.add_argument("--ts-scale", type=float, default=1e-3, help="Scale device time to seconds")
-    ap.add_argument("--name-prefix", default=None, help="Optional prefix, e.g. 'device_a.'")
+    ap.add_argument(
+        "--ts-field", default=None, help="Field with device time (e.g. ts_ms)"
+    )
+    ap.add_argument(
+        "--ts-scale", type=float, default=1e-3, help="Scale device time to seconds"
+    )
+    ap.add_argument(
+        "--name-prefix", default=None, help="Optional prefix, e.g. 'device_a.'"
+    )
 
     # PlotJuggler WebSocket Server
-    ap.add_argument("--ws-url", default="ws://127.0.0.1:9871",
-                    help="PJ WebSocket Server URL (default ws://127.0.0.1:9871)")
+    ap.add_argument(
+        "--ws-url",
+        default="ws://127.0.0.1:9871",
+        help="PJ WebSocket Server URL (default ws://127.0.0.1:9871)",
+    )
 
     return ap.parse_args()
 
@@ -189,7 +217,15 @@ async def main_async():
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+def _setup_logging():
+    logging.basicConfig(
+        level=logging.INFO,  # change to DEBUG to see skipped-record details
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
 def main():
+    _setup_logging()
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:

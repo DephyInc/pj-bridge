@@ -12,7 +12,8 @@ Assumptions and limits:
 - Supports fixed-size arrays like: float acc[3];
 - Rejects pointers, bitfields, and nested structs.
 - Does not auto-insert padding. If the device struct is not packed, use --packed false
-  and provide explicit padding manually in a later step. Most devices use packed for wire I/O.
+  and provide explicit padding manually in a later step. Most devices use packed
+  for wire I/O.
 
 Output:
 - JSON to stdout, for example:
@@ -26,29 +27,37 @@ Output:
 import argparse
 import json
 import re
-import sys
 import struct
+import sys
 from typing import List, Tuple
 
 # Map common C types to Python struct codes.
 # char is mapped to signed byte by default. Change to "B" if needed.
 CTYPE_MAP = {
-    "int8_t": "b",   "uint8_t": "B",
-    "int16_t": "h",  "uint16_t": "H",
-    "int32_t": "i",  "uint32_t": "I",
-    "int64_t": "q",  "uint64_t": "Q",
-    "float": "f",    "double": "d",
+    "int8_t": "b",
+    "uint8_t": "B",
+    "int16_t": "h",
+    "uint16_t": "H",
+    "int32_t": "i",
+    "uint32_t": "I",
+    "int64_t": "q",
+    "uint64_t": "Q",
+    "float": "f",
+    "double": "d",
     "bool": "?",
     "char": "b",
 }
 
+
 def strip_comments(code: str) -> str:
-    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)   # /* ... */
-    code = re.sub(r"//.*?$", "", code, flags=re.M)      # // ...
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)  # /* ... */
+    code = re.sub(r"//.*?$", "", code, flags=re.M)  # // ...
     return code
+
 
 def normalize_ws(s: str) -> str:
     return " ".join(s.strip().split())
+
 
 def parse_declarations(block: str) -> List[Tuple[str, str, int]]:
     """
@@ -93,7 +102,10 @@ def parse_declarations(block: str) -> List[Tuple[str, str, int]]:
                 decls.append((ctype_raw, nm, 1))
     return decls
 
-def derive_struct(header_path: str, struct_name: str, endian: str, packed: bool) -> Tuple[str, List[str]]:
+
+def derive_struct(
+    header_path: str, struct_name: str, endian: str, packed: bool
+) -> Tuple[str, List[str]]:
     """
     Return (fmt, labels) for the given typedef struct in header_path.
     Endianness is one of '<', '>', '='.
@@ -108,13 +120,18 @@ def derive_struct(header_path: str, struct_name: str, endian: str, packed: bool)
     #   typedef struct { ... } MyName;
     #   typedef struct MyName { ... } MyName;
     pat = re.compile(
-        r"typedef\s+struct(?:\s+" + re.escape(struct_name) + r")?\s*\{(.*?)\}\s*"
-        + re.escape(struct_name) + r"\s*;",
+        r"typedef\s+struct(?:\s+"
+        + re.escape(struct_name)
+        + r")?\s*\{(.*?)\}\s*"
+        + re.escape(struct_name)
+        + r"\s*;",
         flags=re.S,
     )
     m = pat.search(code)
     if not m:
-        raise ValueError(f"Could not find typedef struct {struct_name} in {header_path}")
+        raise ValueError(
+            f"Could not find typedef struct {struct_name} in {header_path}"
+        )
 
     body = m.group(1)
     decls = parse_declarations(body)
@@ -139,19 +156,23 @@ def derive_struct(header_path: str, struct_name: str, endian: str, packed: bool)
     if not packed:
         print(
             "[warn] packed=false. This script does not auto-insert padding. "
-            "If your device struct is not packed, consider packing it on the device or add 'x' pad bytes manually.",
+            "If your device struct is not packed, consider packing it on the device.",
             file=sys.stderr,
         )
 
     fmt = endian + fmt_body
     return fmt, labels
 
+
 def main():
     ap = argparse.ArgumentParser(
-        description="Derive Python struct format and field labels from a C typedef struct."
+        description="Derive Python struct format and field labels "
+        + "from a C typedef struct."
     )
     ap.add_argument("--header", required=True, help="Path to the C header file")
-    ap.add_argument("--struct-name", required=True, help="Name of the typedef struct to parse")
+    ap.add_argument(
+        "--struct-name", required=True, help="Name of the typedef struct to parse"
+    )
     ap.add_argument(
         "--endian",
         choices=["<", ">", "="],
@@ -167,7 +188,9 @@ def main():
     args = ap.parse_args()
 
     try:
-        fmt, labels = derive_struct(args.header, args.struct_name, args.endian, args.packed)
+        fmt, labels = derive_struct(
+            args.header, args.struct_name, args.endian, args.packed
+        )
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(2)
@@ -178,6 +201,7 @@ def main():
         "record_size": struct.calcsize(fmt),
     }
     print(json.dumps(out, indent=2))
+
 
 if __name__ == "__main__":
     main()

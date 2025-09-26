@@ -15,7 +15,7 @@ Bridge a delimiter-framed TCP binary stream into JSON over WebSocket for [PlotJu
 
 - Python 3.12+
 - Device emits batches framed like:
-  
+
       [ 0xDE 0xAD 0xBE 0xEF ][ COUNT:1 byte ][ PAYLOAD ] * COUNT
 
 - The payload is a *packed* C struct defined in a header file.
@@ -38,8 +38,8 @@ pip install -e .
 
 ## Start Bridge
 
-Connect to device, parse batches, forward to PJ.  
-Default TCP port is **5000**; default WS URL is **ws://127.0.0.1:9871**.  
+Connect to device, parse batches, forward to PJ.
+Default TCP port is **5000**; default WS URL is **ws://127.0.0.1:9871**.
 Timestamps are in **milliseconds** by default (`--ts-scale 1e-3`).
 
 ```bash
@@ -84,7 +84,7 @@ Notes:
 ## Field naming
 
 - All non-timestamp fields are emitted with the optional prefix:
-  
+
   ```bash
   --name-prefix "device_a."
   ```
