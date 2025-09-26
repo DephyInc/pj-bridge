@@ -1,0 +1,71 @@
+name: pypi-release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Verify tag matches project version
+        run: |
+          python - <<'PY'
+          import tomllib, os, sys
+          with open("pyproject.toml","rb") as f:
+              data = tomllib.load(f)
+          version = data["project"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          if version != tag:
+              print(f"Tag {tag} does not match pyproject version {version}", file=sys.stderr)
+              sys.exit(1)
+          print(f"✓ tag {tag} matches project version {version}")
+          PY
+
+      - name: Install build backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dists
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pj-bridge   # optional
+    permissions:
+      id-token: write    # OIDC
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dists
+          path: dist
+
+      - name: Publish to PyPI (OIDC)
+        uses: pypa/gh-action-pypi-publish@v1.13.0
+        with:
+          packages-dir: dist
+          # attestations: true   # default with OIDC; uncomment to be explicit
