@@ -1,0 +1,112 @@
+# pj-bridge
+
+Bridge a delimiter-framed TCP binary stream into JSON over WebSocket for [PlotJuggler](https://github.com/facontidavide/PlotJuggler).
+
+**Mode:** PlotJuggler runs the **WebSocket Server**. The bridge connects as a **WebSocket client** and pushes JSON messages.
+
+## What’s in this repo
+
+- `derive_struct.py` — Parse a C header (`typedef struct { ... } Name;`) and derive the Python `struct` format and expanded field labels.
+- `tcp_parser.py` — Connect to the device, parse **[DE AD BE EF][COUNT][PAYLOAD] × COUNT** batches into NDJSON (one JSON per line).
+- `socket_client.py` — Read NDJSON (stdin or file) and forward to PlotJuggler’s WebSocket Server.
+- `bridge.py` — One-process solution: connect to device, parse, and forward to PlotJuggler (no shell pipes needed).
+
+## Requirements
+
+- Python 3.12+
+- Device emits batches framed like:
+  
+      [ 0xDE 0xAD 0xBE 0xEF ][ COUNT:1 byte ][ PAYLOAD ] * COUNT
+
+- The payload is a *packed* C struct defined in a header file.
+- PlotJuggler with the WebSocket Server plugin enabled (Protocol: JSON).
+
+## Install
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+## Start PlotJuggler’s WebSocket Server
+
+- In PlotJuggler: **Streaming → WebSocket Server**
+- Protocol: **JSON**
+- Port: for example **9871**
+- Click **Start**
+
+## Start Bridge
+
+Connect to device, parse batches, forward to PJ.  
+Default TCP port is **5000**; default WS URL is **ws://127.0.0.1:9871**.  
+Timestamps are in **milliseconds** by default (`--ts-scale 1e-3`).
+
+```bash
+python3 bridge.py \
+  --host 192.168.1.91 \
+  --struct-header /path/to/telemetry.h \
+  --struct-name MyStruct \
+  --name-prefix "device_a."
+```
+
+Notes:
+- Add `--ws-url ws://<pj_host>:9871` if PlotJuggler runs elsewhere.
+- If needed, guard against corrupted batches with `--max-frames-per-batch N`.
+- To fall back to single `[DELIM][PAYLOAD]` (no COUNT), pass `--no-counted-batch`.
+
+## Two-process pipeline (for debugging)
+
+0) Derive the struct (optional sanity check). Prints JSON describing the derived `struct_fmt`, `fields`, and `record_size`.
+
+  ```bash
+  python3 derive_struct.py \
+    --header /path/to/telemetry.h \
+    --struct-name MyStruct \
+  ```
+
+1) Parse from device to NDJSON:
+
+  ```bash
+  python3 tcp_parser.py \
+   --host 192.168.1.91 \
+   --struct-header /path/to/telemetry.h \
+   --struct-name MyStruct \
+   --name-prefix "device_a."
+  ```
+
+2) Forward NDJSON to PlotJuggler:
+
+  ```bash
+  python3 tcp_parser.py --host 192.168.1.91 --struct-header /path/to/telemetry.h --struct-name MyStruct | python3 socket_client.py --ws-url ws://127.0.0.1:9871
+  ```
+
+## Field naming
+
+- All non-timestamp fields are emitted with the optional prefix:
+  
+  ```bash
+  --name-prefix "device_a."
+  ```
+
+  Example JSON:
+
+  ```json
+  {"t": 1727370023.415, "device_a.ax": 0.02, "device_a.ay": -0.01, "device_a.az": 9.81}
+  ```
+
+- Arrays like `float gyro[3];` become `device_a.gyro[0]`, `device_a.gyro[1]`, `device_a.gyro[2]`.
+
+## Timestamp (`t`)
+
+- If `--ts-field ts_ms` is provided, `t = ts_ms * --ts-scale` (default `1e-3`, ms → seconds).
+- If no `--ts-field` is set, arrival time is used (`time.time()` in seconds).
+- If your device time is relative (since boot) and you want wall-clock, you can add an epoch offset in code; ask if you want a ready-made flag for that.
+
+## Uninstall
+
+- Deactivate the venv and remove the project directory, or run `pip uninstall pj-bridge` inside the venv (if installed as a package).
+
+## License
+
+[MIT](https://dephy-inc.mit-license.org/)

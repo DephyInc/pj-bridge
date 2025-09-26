@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""
+tcp_parser.py
+
+Connect to a delimiter-framed TCP stream and output NDJSON (one JSON object per line).
+
+Framing supported (default and recommended):
+  [ 0xDE 0xAD 0xBE 0xEF ][ COUNT:1 byte ][ PAYLOAD ] * COUNT
+
+Where PAYLOAD is a fixed-size packed C struct derived from your header file.
+
+Examples:
+
+  python3 tcp_parser.py \
+    --host 192.168.1.91 \
+    --port 5000 \
+    --delimiter 0xDEADBEEF \
+    --struct-header /path/to/telemetry.h \
+    --struct-name MyStruct \
+    --endian "<" \
+    --ts-field ts_ms \
+    --ts-scale 1e-3 \
+    --name-prefix "device_a."
+
+Notes:
+  - Prints one JSON per line to stdout (NDJSON). Flushes by default unless --no-flush.
+  - Reconnects on TCP errors.
+  - If your device struct is not packed, add packing on the device or extend the fmt with explicit padding.
+"""
+
+import argparse
+import json
+import socket
+import struct
+import sys
+import time
+from typing import List, Tuple, Optional
+
+# Import derive_struct from sibling module
+try:
+    from derive_struct import derive_struct  # type: ignore
+except Exception:
+    print("error: could not import derive_struct. Ensure derive_struct.py is in the same repo.", file=sys.stderr)
+    raise
+
+
+def parse_hex_u32(s: str) -> bytes:
+    s = s.strip().lower()
+    if s.startswith("0x"):
+        s = s[2:]
+    if len(s) != 8:
+        raise ValueError("delimiter must be exactly 4 bytes (8 hex chars)")
+    val = int(s, 16)
+    return val.to_bytes(4, byteorder="big")
+
+
+def connect_tcp(host: str, port: int, retry_sec: float, recv_buf: int) -> socket.socket:
+    while True:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            s.settimeout(1.5)
+            s.connect((host, port))
+            if recv_buf > 0:
+                try:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, recv_buf)
+                except Exception:
+                    pass
+            print(f"[TCP] connected to {host}:{port}", file=sys.stderr)
+            return s
+        except Exception as e:
+            print(f"[TCP] connect failed: {e}. retry in {retry_sec}s", file=sys.stderr)
+            time.sleep(retry_sec)
+
+
+class DelimitedRecordParser:
+    """
+    Parses a stream framed by a 4-byte delimiter.
+    Two modes:
+      - counted batches: [DELIM][COUNT][PAYLOAD]*COUNT  (this is your current device format)
+      - single payload:  [DELIM][PAYLOAD]               (fallback if --no-counted-batch)
+
+    DELIM is typically 0xDEADBEEF.
+    """
+
+    def __init__(
+        self,
+        struct_fmt: str,
+        fields: List[str],
+        ts_field: Optional[str],
+        ts_scale: float,
+        name_prefix: Optional[str],
+        delimiter: bytes,
+        counted_batch: bool = True,
+        max_frames_per_batch: int = 64,
+    ):
+        self.struct_fmt = struct_fmt
+        self.fields = fields
+        self.ts_field = ts_field
+        self.ts_scale = ts_scale
+        self.name_prefix = name_prefix or ""
+        self.delim = delimiter
+        self.counted_batch = counted_batch
+        self.max_frames_per_batch = max_frames_per_batch
+
+        self.rec_size = struct.calcsize(self.struct_fmt)
+        dummy = b"\x00" * self.rec_size
+        if len(struct.unpack(self.struct_fmt, dummy)) != len(self.fields):
+            raise ValueError("fields do not match struct format item count")
+
+    def _decode_payload_to_json(self, payload: bytes) -> str:
+        vals = struct.unpack(self.struct_fmt, payload)
+        data = dict(zip(self.fields, vals))
+
+        # timestamp (seconds as float)
+        if self.ts_field:
+            try:
+                t_val = float(data[self.ts_field]) * self.ts_scale
+            except Exception:
+                t_val = time.time()
+        else:
+            t_val = time.time()
+
+        out = {"t": t_val}
+        for k, v in data.items():
+            if k == self.ts_field:
+                continue
+            name = f"{self.name_prefix}{k}" if self.name_prefix else k
+            out[name] = v
+        return json.dumps(out, separators=(",", ":"), ensure_ascii=False)
+
+    def parse_buffer(self, buf: bytes) -> Tuple[List[str], bytes]:
+        """
+        Scan the buffer for frames and return (list_of_json_strings, leftover_bytes).
+        Robust to split delimiters and partial batches across TCP chunks.
+        """
+        msgs: List[str] = []
+        d = self.delim
+        dlen = len(d)
+
+        i = 0
+        blen = len(buf)
+
+        while True:
+            pos = buf.find(d, i)
+            if pos < 0:
+                # Keep tail to catch split delimiter across boundaries
+                keep_from = max(blen - (dlen - 1), 0)
+                return msgs, buf[keep_from:]
+
+            # We found a delimiter at pos
+            after_delim = pos + dlen
+
+            if self.counted_batch:
+                # Need at least 1 byte for COUNT
+                if after_delim + 1 > blen:
+                    # Not enough data yet; keep from this delimiter
+                    return msgs, buf[pos:]
+                count = buf[after_delim]
+                # Sanity check
+                if count == 0:
+                    # Nothing to parse this batch; skip delimiter + count
+                    i = after_delim + 1
+                    continue
+                if count > self.max_frames_per_batch:
+                    # Likely noise or corruption; skip this delimiter
+                    # Move forward by 1 to rescan for next delimiter
+                    i = pos + 1
+                    continue
+
+                # Total bytes needed after COUNT
+                total_payload_bytes = count * self.rec_size
+                end_needed = after_delim + 1 + total_payload_bytes
+                if end_needed > blen:
+                    # Wait for more data; keep from this delimiter
+                    return msgs, buf[pos:]
+
+                # We have a full batch; decode each payload
+                start_payloads = after_delim + 1
+                offset = start_payloads
+                for _ in range(count):
+                    payload = buf[offset : offset + self.rec_size]
+                    try:
+                        msgs.append(self._decode_payload_to_json(payload))
+                    except Exception:
+                        # Skip malformed record and try to keep going
+                        pass
+                    offset += self.rec_size
+
+                # Advance i past the whole batch
+                i = end_needed
+                # Continue scanning for the next delimiter
+                continue
+
+            else:
+                # Single payload mode: [DELIM][PAYLOAD]
+                start_payload = after_delim
+                end_payload = start_payload + self.rec_size
+                if end_payload <= blen:
+                    payload = buf[start_payload:end_payload]
+                    try:
+                        msgs.append(self._decode_payload_to_json(payload))
+                    except Exception:
+                        pass
+                    i = end_payload
+                    continue
+                else:
+                    # Not enough bytes yet
+                    return msgs, buf[pos:]
+
+
+def run(args):
+    # Derive struct format and labels from header
+    struct_fmt, fields = derive_struct(
+        header_path=args.struct_header,
+        struct_name=args.struct_name,
+        endian=args.endian,
+        packed=True if args.packed else False,
+    )
+
+    delimiter = parse_hex_u32(args.delimiter)
+    parser = DelimitedRecordParser(
+        struct_fmt=struct_fmt,
+        fields=fields,
+        ts_field=args.ts_field,
+        ts_scale=args.ts_scale,
+        name_prefix=args.name_prefix,
+        delimiter=delimiter,
+        counted_batch=(not args.no_counted_batch),
+        max_frames_per_batch=args.max_frames_per_batch,
+    )
+
+    leftover = b""
+    flush = (not args.no_flush)
+
+    while True:
+        s = connect_tcp(args.host, args.port, args.retry_sec, args.recv_bytes)
+        try:
+            while True:
+                try:
+                    chunk = s.recv(args.recv_bytes)
+                    if not chunk:
+                        raise ConnectionError("EOF")
+                    buf = leftover + chunk
+                    msgs, leftover = parser.parse_buffer(buf)
+                    for m in msgs:
+                        print(m, flush=flush)
+                except socket.timeout:
+                    continue
+        except Exception as e:
+            print(f"[TCP] error: {e}. reconnecting...", file=sys.stderr)
+            try:
+                s.close()
+            except Exception:
+                pass
+            time.sleep(args.retry_sec)
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(
+        description="Parse a delimiter + count framed TCP binary stream into JSON (NDJSON to stdout)."
+    )
+
+    # TCP (short flags)
+    ap.add_argument("--host", required=True, help="Device host")
+    ap.add_argument("--port", type=int, default=5000, help="Device TCP port")
+    ap.add_argument("--recv-bytes", type=int, default=8192, help="recv() size")
+    ap.add_argument("--retry-sec", type=float, default=2.0, help="reconnect delay")
+
+    # Framing
+    ap.add_argument("--delimiter", default="0xDEADBEEF", help="4-byte delimiter in hex")
+    ap.add_argument("--no-counted-batch", action="store_true",
+                    help="Disable [DELIM][COUNT][PAYLOAD]*COUNT parsing; use single [DELIM][PAYLOAD] mode")
+    ap.add_argument("--max-frames-per-batch", type=int, default=64,
+                    help="Sanity cap for COUNT to ignore corrupted batches")
+
+    # Struct derivation
+    ap.add_argument("--struct-header", required=True, help="Path to C header")
+    ap.add_argument("--struct-name", required=True, help="Typedef struct name")
+    ap.add_argument("--endian", choices=["<", ">", "="], default="<")
+    ap.add_argument(
+        "--packed",
+        type=lambda s: s.lower() in ("1", "true", "yes", "y"),
+        default=True,
+        help="Assume the device struct is packed (no padding). Default true",
+    )
+
+    # Timestamp and naming
+    ap.add_argument("--ts-field", default=None, help="Field with device time (e.g. ts_ms)")
+    ap.add_argument("--ts-scale", type=float, default=1e-3, help="Scale device time to seconds (ms default)")
+    ap.add_argument("--name-prefix", default=None, help="Optional prefix, e.g. 'device_a.'")
+
+    # Output
+    ap.add_argument("--no-flush", action="store_true", help="Do not flush stdout on each line")
+
+    return ap.parse_args()
+
+
+def main():
+    try:
+        run(parse_args())
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
