@@ -36,7 +36,7 @@ import sys
 
 # Local deps
 try:
-    from derive_struct import derive_struct
+    from .derive_struct import derive_struct
 except Exception:
     print(
         "error: could not import derive_struct. Ensure derive_struct.py is present.",
@@ -45,7 +45,7 @@ except Exception:
     raise
 
 try:
-    from tcp_parser import DelimitedRecordParser, connect_tcp, parse_hex_u32
+    from .tcp_parser import DelimitedRecordParser, connect_tcp, parse_hex_u32
 except Exception:
     print(
         "error: could not import from tcp_parser. Ensure tcp_parser.py is present.",
@@ -54,7 +54,7 @@ except Exception:
     raise
 
 try:
-    from socket_client import ws_sender
+    from .socket_client import ws_sender
 except Exception:
     print("error: could not import ws_sender from socket_client.py.", file=sys.stderr)
     raise

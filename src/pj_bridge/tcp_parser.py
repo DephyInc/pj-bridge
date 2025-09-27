@@ -40,7 +40,7 @@ from typing import List, Optional, Tuple
 
 # Import derive_struct from sibling module
 try:
-    from derive_struct import derive_struct
+    from .derive_struct import derive_struct
 except Exception:
     print(
         "error: could not import derive_struct.",
