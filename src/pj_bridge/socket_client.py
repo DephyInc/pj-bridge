@@ -25,9 +25,7 @@ except ImportError:
     sys.exit(1)
 
 
-async def producer(
-    input_path: Optional[str], q: asyncio.Queue, validate: bool, strip: bool
-):
+async def producer(input_path: Optional[str], q: asyncio.Queue, validate: bool, strip: bool):
     """
     Read NDJSON lines from stdin or a file and enqueue them.
     """
@@ -111,15 +109,9 @@ def parse_args():
         default="ws://127.0.0.1:9871",
         help="PlotJuggler WebSocket Server URL (default ws://127.0.0.1:9871)",
     )
-    ap.add_argument(
-        "--input", default="-", help="NDJSON input file. Use '-' for stdin (default)"
-    )
-    ap.add_argument(
-        "--retry-sec", type=float, default=2.0, help="Reconnect delay on WS errors"
-    )
-    ap.add_argument(
-        "--no-validate", action="store_true", help="Do not JSON-validate each line"
-    )
+    ap.add_argument("--input", default="-", help="NDJSON input file. Use '-' for stdin (default)")
+    ap.add_argument("--retry-sec", type=float, default=2.0, help="Reconnect delay on WS errors")
+    ap.add_argument("--no-validate", action="store_true", help="Do not JSON-validate each line")
     ap.add_argument(
         "--no-strip",
         action="store_true",

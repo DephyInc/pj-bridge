@@ -101,9 +101,7 @@ async def tcp_reader_to_queue(
             except OSError as e:
                 logging.getLogger("pj_bridge").debug("socket close failed: %s", e)
             except Exception as e:
-                logging.getLogger("pj_bridge").warning(
-                    "unexpected error on socket close: %s", e
-                )
+                logging.getLogger("pj_bridge").warning("unexpected error on socket close: %s", e)
 
             await asyncio.sleep(retry_sec)
 
@@ -125,8 +123,7 @@ def parse_args():
     ap.add_argument(
         "--no-counted-batch",
         action="store_true",
-        help="Disable [DELIM][COUNT][PAYLOAD]*COUNT parsing; "
-        + "use single [DELIM][PAYLOAD] mode",
+        help="Disable [DELIM][COUNT][PAYLOAD]*COUNT parsing; " + "use single [DELIM][PAYLOAD] mode",
     )
     ap.add_argument(
         "--max-frames-per-batch",
@@ -147,15 +144,9 @@ def parse_args():
     )
 
     # Timestamp and naming
-    ap.add_argument(
-        "--ts-field", default=None, help="Field with device time (e.g. ts_ms)"
-    )
-    ap.add_argument(
-        "--ts-scale", type=float, default=1e-3, help="Scale device time to seconds"
-    )
-    ap.add_argument(
-        "--name-prefix", default=None, help="Optional prefix, e.g. 'device_a.'"
-    )
+    ap.add_argument("--ts-field", default=None, help="Field with device time (e.g. ts_ms)")
+    ap.add_argument("--ts-scale", type=float, default=1e-3, help="Scale device time to seconds")
+    ap.add_argument("--name-prefix", default=None, help="Optional prefix, e.g. 'device_a.'")
 
     # PlotJuggler WebSocket Server
     ap.add_argument(

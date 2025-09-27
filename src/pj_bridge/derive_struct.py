@@ -129,9 +129,7 @@ def derive_struct(
     )
     m = pat.search(code)
     if not m:
-        raise ValueError(
-            f"Could not find typedef struct {struct_name} in {header_path}"
-        )
+        raise ValueError(f"Could not find typedef struct {struct_name} in {header_path}")
 
     body = m.group(1)
     decls = parse_declarations(body)
@@ -142,9 +140,7 @@ def derive_struct(
     for ctype_raw, name, arrlen in decls:
         ctype = normalize_ws(ctype_raw)
         if ctype not in CTYPE_MAP:
-            raise ValueError(
-                f"Unsupported C type '{ctype}'. Add a mapping in CTYPE_MAP if needed."
-            )
+            raise ValueError(f"Unsupported C type '{ctype}'. Add a mapping in CTYPE_MAP if needed.")
         code_char = CTYPE_MAP[ctype]
         if arrlen == 1:
             fmt_body += code_char
@@ -166,13 +162,10 @@ def derive_struct(
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Derive Python struct format and field labels "
-        + "from a C typedef struct."
+        description="Derive Python struct format and field labels " + "from a C typedef struct."
     )
     ap.add_argument("--header", required=True, help="Path to the C header file")
-    ap.add_argument(
-        "--struct-name", required=True, help="Name of the typedef struct to parse"
-    )
+    ap.add_argument("--struct-name", required=True, help="Name of the typedef struct to parse")
     ap.add_argument(
         "--endian",
         choices=["<", ">", "="],
@@ -188,9 +181,7 @@ def main():
     args = ap.parse_args()
 
     try:
-        fmt, labels = derive_struct(
-            args.header, args.struct_name, args.endian, args.packed
-        )
+        fmt, labels = derive_struct(args.header, args.struct_name, args.endian, args.packed)
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(2)
