@@ -1,47 +1,78 @@
-[project]
-name = "pj-bridge"
-version = "0.1.2"
-description = "Bridge a delimiter-framed TCP binary stream into JSON over WebSocket for PlotJuggler."
-readme = "README.md"
-requires-python = ">=3.12"
-authors = [{ name = "Carlos Asmat" }]
-license = { text = "MIT" }
-
-dependencies = [
-  "websockets>=12.0,<14.0",
-]
-
-[project.optional-dependencies]
-dev = [
-  "pre-commit>=4.3.0",
-  "ruff>=0.6.8",
-  "mypy>=1.10.0",
-  "bandit>=1.7.9",
-  "pytest>=8.2.0",
-  "pytest-cov>=5.0.0",
-  "uv>=0.4",
-  "types-requests",
-  "types-setuptools",
-]
-
-[project.scripts]
-pj-bridge = "pj_bridge.bridge:main"
-tcp-parser = "pj_bridge.tcp_parser:main"
-socket-client = "pj_bridge.socket_client:main"
-derive-struct = "pj_bridge.derive_struct:main"
-
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=75", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-package-dir = {"" = "src"}
+[project]
+name = "bk-precision-1900"
+version = "1.0.1"
+description = "Control the BK Precision 1900 series power supplies"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Carlos Asmat", email = "casmat@dephy.com" }]
+keywords = ["B&K", "BK Precision", "hardware", "serial", "power-supply"]
+dependencies = [
+  "pyserial>=3.5",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: System :: Hardware",
+  "Topic :: Scientific/Engineering",
+  "Typing :: Typed",
+]
 
+[project.urls]
+Homepage = "https://github.com/DephyInc/bk-precision-1900"
+Repository = "https://github.com/DephyInc/bk-precision-1900"
+Issues = "https://github.com/DephyInc/bk-precision-1900/issues"
+
+# SINGLE scripts table — keep only this one
+[project.scripts]
+bk1902b = "bk_precision_1900.bk1902b:main"
+
+# Package discovery for your src layout
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["pj_bridge*"]
+where = ["."]
+include = ["bk_precision_1900*"]
 
+# -----------------------------
+# Ruff: formatter + linter
+# -----------------------------
 [tool.ruff]
 line-length = 100
+target-version = "py312"
+extend-safe-fixes = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+docstring-code-format = true
+
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+select = ["E", "F", "I", "B", "UP"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["bk_precision_1900", "bk1902b"]
+
+# -----------------------------
+# mypy
+# -----------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_subclassing_any = true
+disallow_any_generics = true
+no_implicit_optional = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["serial", "serial.*"]
+ignore_missing_imports = true
