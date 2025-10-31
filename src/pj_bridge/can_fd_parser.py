@@ -111,7 +111,7 @@ def _decode_motor_part_le(
     cmd_d = struct.unpack_from("<h", payload, off + 18)[0]
 
     def rpm(x: int) -> float:
-        return x * 0.5
+        return x * 2
 
     def amps(x: int) -> float:
         return x / 1024.0
