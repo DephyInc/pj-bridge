@@ -142,8 +142,12 @@ def decode_fullstate_le_45(payload: bytes, prefix: str) -> Dict[str, Any]:
 
     num = payload[0]
     sys_state = payload[1]
-    v_scaled = struct.unpack_from("<H", payload, 2)[0]
+    ib_raw = struct.unpack_from("<H", payload, 2)[0]
+    v_scaled = struct.unpack_from("<H", payload, 4)[0]
     last_cmd = payload[4]
+
+    ib_offset = 4096.0 / 3.0 * 1.65
+    i_batt = (ib_raw - ib_offset) / 4096.0 * 3.0 / 0.044
 
     # Motors
     m0 = _decode_motor_part_le(payload, base=5, prefix=prefix, idx=0)
@@ -154,7 +158,8 @@ def decode_fullstate_le_45(payload: bytes, prefix: str) -> Dict[str, Any]:
         f"{prefix}seq": num,
         f"{prefix}system_state": sys_state,
         f"{prefix}last_cmd": last_cmd,
-        f"{prefix}voltage": v_scaled / 16.0,
+        f"{prefix}batt_curr": i_batt,
+        f"{prefix}voltage": v_scaled / 16,
     }
     out.update(m0)
     out.update(m1)
