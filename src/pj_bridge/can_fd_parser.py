@@ -99,16 +99,31 @@ def _decode_motor_part_le(
     """
     Decode one MSGMotorPart at payload[base:base+20] (little-endian).
     """
+    # off = base
+    # state = payload[off + 0]
+    # traj = payload[off + 1]
+    # calib = payload[off + 1]
+    # pos = struct.unpack_from("<i", payload, off + 2)[0]
+    # exp = struct.unpack_from("<i", payload, off + 6)[0]
+    # vel = struct.unpack_from("<h", payload, off + 10)[0]
+    # cmd_v = struct.unpack_from("<h", payload, off + 12)[0]
+    # cmd_i = struct.unpack_from("<h", payload, off + 14)[0]
+    # sns_i = struct.unpack_from("<h", payload, off + 16)[0]
+    # cmd_d = struct.unpack_from("<h", payload, off + 18)[0]
+
     off = base
     state = payload[off + 0]
     traj = payload[off + 1]
-    pos = struct.unpack_from("<i", payload, off + 2)[0]
-    exp = struct.unpack_from("<i", payload, off + 6)[0]
-    vel = struct.unpack_from("<h", payload, off + 10)[0]
-    cmd_v = struct.unpack_from("<h", payload, off + 12)[0]
-    cmd_i = struct.unpack_from("<h", payload, off + 14)[0]
-    sns_i = struct.unpack_from("<h", payload, off + 16)[0]
-    cmd_d = struct.unpack_from("<h", payload, off + 18)[0]
+    calib = bool(payload[off + 2])
+
+    pos = struct.unpack_from("<i", payload, off + 3)[0]
+    exp = struct.unpack_from("<i", payload, off + 7)[0]
+
+    vel = struct.unpack_from("<f", payload, off + 12)[0]
+    cmd_v = struct.unpack_from("<f", payload, off + 16)[0]
+    cmd_i = struct.unpack_from("<f", payload, off + 20)[0]
+    sns_i = struct.unpack_from("<f", payload, off + 24)[0]
+    cmd_d = struct.unpack_from("<f", payload, off + 28)[0]
 
     def rpm(x: int) -> float:
         return x * 2
@@ -119,14 +134,16 @@ def _decode_motor_part_le(
     def duty(x: int) -> float:
         return x / 32768.0
 
-    p = f"{prefix}m{idx}_"
+    # p = f"{prefix}m{idx}_"
+    p = ""
     return {
         f"{p}state": state,
         f"{p}trajectory": traj,
+        f"{p}calibrated": calib,
         f"{p}pos": pos,
         f"{p}expected_pos": exp,
         f"{p}vel_rpm": rpm(vel),
-        f"{p}cmd_vel_rpm": rpm(cmd_v),
+        f"{p}cmd_vel_rpm": cmd_v,
         f"{p}cmd_cur_a": amps(cmd_i),
         f"{p}sns_cur_a": amps(sns_i),
         f"{p}cmd_duty": duty(cmd_d),
@@ -143,15 +160,16 @@ def decode_fullstate_le_45(payload: bytes, prefix: str) -> Dict[str, Any]:
     num = payload[0]
     sys_state = payload[1]
     ib_raw = struct.unpack_from("<H", payload, 2)[0]
-    v_scaled = struct.unpack_from("<H", payload, 4)[0]
+    v_raw = struct.unpack_from("<H", payload, 4)[0]
     last_cmd = payload[4]
 
     ib_offset = 4096.0 / 3.0 * 1.65
     i_batt = (ib_raw - ib_offset) / 4096.0 * 3.0 / 0.044
 
+    v_scaled = v_raw / 16
+
     # Motors
-    m0 = _decode_motor_part_le(payload, base=5, prefix=prefix, idx=0)
-    m1 = _decode_motor_part_le(payload, base=25, prefix=prefix, idx=1)
+    m0 = _decode_motor_part_le(payload, base=8, prefix=prefix, idx=0)
 
     out = {
         "t": time.time(),
@@ -159,10 +177,10 @@ def decode_fullstate_le_45(payload: bytes, prefix: str) -> Dict[str, Any]:
         f"{prefix}system_state": sys_state,
         f"{prefix}last_cmd": last_cmd,
         f"{prefix}batt_curr": i_batt,
-        f"{prefix}voltage": v_scaled / 16,
+        f"{prefix}voltage": v_scaled,
     }
     out.update(m0)
-    out.update(m1)
+    # out.update(m1)
     return out
 
 
@@ -178,7 +196,7 @@ def parse_args() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--name-prefix",
-        default="device_a.",
+        default="",
         help="Prefix for output fields (default: device_a.)",
     )
     ap.add_argument(
