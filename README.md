@@ -103,6 +103,58 @@ Notes:
 - If no `--ts-field` is set, arrival time is used (`time.time()` in seconds).
 - If your device time is relative (since boot) and you want wall-clock, you can add an epoch offset in code; ask if you want a ready-made flag for that.
 
+## Parsing log files
+
+The project provides two standalone tools for working with telemetry logs:
+
+- **`file-parser`** — converts on-device circular binary log files into NDJSON  
+- **`json-to-csv`** — converts NDJSON into CSV
+
+You can generate JSON logs in one of two ways:
+
+1. Live over TCP, using **`tcp-parser`**  
+2. Offline from stored binary log files, using **`file-parser`**
+
+Both paths produce NDJSON (one JSON object per line), which can then be piped into **`json-to-csv`** for analysis in Excel, Pandas, or visualization tools.
+
+### 1. Parsing binary circular log files
+
+Devices store telemetry in fixed-size record slots.  
+`file-parser` reads these slots, applies the struct layout derived from your C header, and streams out JSON.
+
+Example usage:
+
+```bash
+file-parser \
+  --input ~/Downloads/Current.log.2 \
+  --control-file ~/Downloads/Current.control.2 \
+  --struct-header $PATH_TO_STRUCT/telemetry.h \
+  --struct-name telemetry_t \
+  | json-to-csv > telemetry_2.csv
+```
+
+Notes:
+- `--control-file` provides metadata such as record size, checksum size, max-record count, and read/write indices.
+- `--struct-header` and `--struct-name` define the payload layout for unpacking.
+- Output is NDJSON streamed to stdout.
+
+### 2. Converting NDJSON to CSV
+
+`json-to-csv` converts streamed JSON objects into a well-formed CSV file.  
+All JSON lines must contain the same fields (the parsers ensure this).
+
+Example from a live TCP stream:
+
+```bash
+tcp-parser ... | json-to-csv > live.csv
+```
+
+Example from offline logs:
+
+```bash
+file-parser ... | json-to-csv > logs.csv
+```
+
 ## Uninstall
 
 - Deactivate the venv and remove the project directory, or run `pip uninstall pj-bridge` inside the venv (if installed as a package).

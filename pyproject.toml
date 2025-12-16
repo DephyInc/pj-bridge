@@ -1,6 +1,6 @@
 [project]
 name = "pj-bridge"
-version = "0.1.3"
+version = "0.2.0"
 description = "Bridge a delimiter-framed TCP binary stream into JSON over WebSocket for PlotJuggler."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -29,6 +29,8 @@ pj-bridge = "pj_bridge.bridge:main"
 tcp-parser = "pj_bridge.tcp_parser:main"
 socket-client = "pj_bridge.socket_client:main"
 derive-struct = "pj_bridge.derive_struct:main"
+file-parser = "pj_bridge.file_parser:main"
+json-to-csv = "pj_bridge.json_to_csv:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
