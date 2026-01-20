@@ -168,9 +168,9 @@ class DelimitedRecordParser:
 
                 count = buf[after_delim]
 
-                # Read 2-byte message_id (big-endian unsigned)
+                # Read 2-byte message_id (little-endian unsigned)
                 msg_id_offset = after_delim + 1
-                message_id = struct.unpack_from(">H", buf, msg_id_offset)[0]
+                message_id = struct.unpack_from("<H", buf, msg_id_offset)[0]
 
                 # Sanity check
                 if count == 0:
@@ -204,8 +204,7 @@ class DelimitedRecordParser:
                     try:
                         json_msg = self._decode_payload_to_json(payload)
 
-                        # OPTIONAL: attach message_id
-                        # If you want it inside the JSON:
+                        # Attach message_id
                         obj = json.loads(json_msg)
                         obj["message_id"] = message_id
                         msgs.append(json.dumps(obj, separators=(",", ":")))
@@ -217,6 +216,7 @@ class DelimitedRecordParser:
 
                 # Advance i past the whole batch
                 i = end_needed
+                # Continue scanning for the next delimiter
                 continue
             else:
                 # Single payload mode: [DELIM][PAYLOAD]

@@ -1,10 +1,10 @@
 [project]
 name = "pj-bridge"
-version = "0.3.0"
+version = "1.0.0"
 description = "Bridge a delimiter-framed binary stream into JSON over WebSocket for PlotJuggler (or stdout if file)."
 readme = "README.md"
 requires-python = ">=3.12"
-authors = [{ name = "Carlos Asmat" }]
+authors = [{ name = "Carlos Asmat" }, { name = "Gene Gelfand" }]
 license = { text = "MIT" }
 
 dependencies = [
