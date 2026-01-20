@@ -3,14 +3,14 @@
 bridge.py
 
 All-in-one bridge:
-- Connect to a delimiter + count framed TCP binary stream
+- Connect to a delimiter + count framed binary stream (tcp or from local file)
 - Derive struct layout from a C header
 - Parse each record into JSON
-- Forward JSON to PlotJuggler's WebSocket Server over WebSocket
+- Forward JSON to PlotJuggler's WebSocket Server over WebSocket OR (if file) just prints to stdout
 
 Relies on local modules:
   - derive_struct.py: derive_struct(header_path, struct_name, endian, packed)
-  - tcp_parser.py: DelimitedRecordParser, parse_hex_u32, connect_tcp
+  - stream_parser.py: DelimitedRecordParser, parse_hex_u32, connect_tcp
   - socket_client.py: ws_sender(ws_url, queue, retry_sec)
 
 Example:
@@ -45,10 +45,10 @@ except Exception:
     raise
 
 try:
-    from .tcp_parser import DelimitedRecordParser, connect_tcp, parse_hex_u32
+    from .stream_parser import DelimitedRecordParser, connect_tcp, parse_hex_u32
 except Exception:
     print(
-        "error: could not import from tcp_parser. Ensure tcp_parser.py is present.",
+        "error: could not import from stream_parser. Ensure stream_parser.py is present.",
         file=sys.stderr,
     )
     raise
@@ -106,17 +106,53 @@ async def tcp_reader_to_queue(
             await asyncio.sleep(retry_sec)
 
 
+def file_reader_to_stdout(
+    path: str,
+    read_bytes: int,
+    parser: DelimitedRecordParser,
+):
+    """
+    Read binary data from file, parse frames, write JSON lines to stdout.
+    """
+    leftover = b""
+    log = logging.getLogger("pj_bridge")
+
+    try:
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(read_bytes)
+                if not chunk:
+                    break
+
+                buf = leftover + chunk
+                msgs, leftover = parser.parse_buffer(buf)
+
+                for m in msgs:
+                    sys.stdout.write(m)
+                    sys.stdout.write("\n")
+
+        sys.stdout.flush()
+        log.info("file processing completed: %s", path)
+
+    except Exception as e:
+        log.error("file reader failed: %s", e)
+        sys.exit(1)
+
+
 def parse_args():
     ap = argparse.ArgumentParser(
-        description="Bridge a delimiter+count framed TCP binary stream to PlotJuggler"
-        + " via WebSocket JSON."
+        description="Bridge a delimiter+count framed binary stream to PlotJuggler"
+        + " via WebSocket JSON (or to stdout if file)."
     )
 
-    # Device TCP (short flags)
-    ap.add_argument("--host", required=True, help="Device host, e.g. 192.168.1.91")
+    # Input source (mutually exclusive)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--host", help="Device host, e.g. 192.168.1.91")
+    src.add_argument("--file", help="Path to local .bin file with captured stream")
+
     ap.add_argument("--port", type=int, default=5000, help="Device TCP port, e.g. 5000")
-    ap.add_argument("--recv-bytes", type=int, default=8192, help="TCP recv() size")
-    ap.add_argument("--retry-sec", type=float, default=2.0, help="Reconnect delay")
+    ap.add_argument("--recv-bytes", type=int, default=8192, help="Read chunk size")
+    ap.add_argument("--retry-sec", type=float, default=2.0, help="Reconnect delay (TCP only)")
 
     # Framing
     ap.add_argument("--delimiter", default="0xDEADBEEF", help="4-byte delimiter in hex")
@@ -182,11 +218,12 @@ async def main_async():
         max_frames_per_batch=args.max_frames_per_batch,
     )
 
-    # Queue between TCP reader and WS sender
+    # Queue between input reader and WS sender
     q: asyncio.Queue = asyncio.Queue(maxsize=20000)
 
-    # Tasks: TCP ingest -> q, WS sender <- q
-    tasks = [
+    tasks = []
+
+    tasks.append(
         asyncio.create_task(
             tcp_reader_to_queue(
                 host=args.host,
@@ -196,9 +233,10 @@ async def main_async():
                 parser=parser,
                 q=q,
             )
-        ),
-        asyncio.create_task(ws_sender(args.ws_url, q, args.retry_sec)),
-    ]
+        )
+    )
+
+    tasks.append(asyncio.create_task(ws_sender(args.ws_url, q, args.retry_sec)))
 
     try:
         await asyncio.gather(*tasks)
@@ -214,9 +252,40 @@ def _setup_logging():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-
 def main():
     _setup_logging()
+    args = parse_args()
+
+    # Derive struct layout from the header
+    struct_fmt, fields = derive_struct(
+        header_path=args.struct_header,
+        struct_name=args.struct_name,
+        endian=args.endian,
+        packed=True if args.packed else False,
+    )
+
+    delimiter = parse_hex_u32(args.delimiter)
+    parser = DelimitedRecordParser(
+        struct_fmt=struct_fmt,
+        fields=fields,
+        ts_field=args.ts_field,
+        ts_scale=args.ts_scale,
+        name_prefix=args.name_prefix,
+        delimiter=delimiter,
+        counted_batch=(not args.no_counted_batch),
+        max_frames_per_batch=args.max_frames_per_batch,
+    )
+
+    # 🚨 FILE MODE: stdout only, no asyncio, no WS
+    if args.file:
+        file_reader_to_stdout(
+            path=args.file,
+            read_bytes=args.recv_bytes,
+            parser=parser,
+        )
+        return
+
+    # 🌐 TCP MODE
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:

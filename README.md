@@ -1,22 +1,22 @@
 # pj-bridge
 
-Bridge a delimiter-framed TCP binary stream into JSON over WebSocket for [PlotJuggler](https://github.com/facontidavide/PlotJuggler).
+Bridge a delimiter-framed TCP binary stream into JSON over WebSocket for [PlotJuggler](https://github.com/facontidavide/PlotJuggler) or stdout (if file).
 
 **Mode:** PlotJuggler runs the **WebSocket Server**. The bridge connects as a **WebSocket client** and pushes JSON messages.
 
 ## What’s in this repo
 
 - `derive_struct.py` — Parse a C header (`typedef struct { ... } Name;`) and derive the Python `struct` format and expanded field labels.
-- `tcp_parser.py` — Connect to the device, parse **[DE AD BE EF][COUNT][PAYLOAD] × COUNT** batches into NDJSON (one JSON per line).
+- `stream_parser.py` — Connect to the device, parse **[DE AD BE EF][COUNT][MSG_ID][PAYLOAD] × COUNT** batches into NDJSON (one JSON per line).
 - `socket_client.py` — Read NDJSON (stdin or file) and forward to PlotJuggler’s WebSocket Server.
-- `bridge.py` — One-process solution: connect to device, parse, and forward to PlotJuggler (no shell pipes needed).
+- `bridge.py` — One-process solution: connect to device, parse, and forward to PlotJuggler (no shell pipes needed) or stdout (if file).
 
 ## Requirements
 
 - Python 3.12+
 - Device emits batches framed like:
 
-      [ 0xDE 0xAD 0xBE 0xEF ][ COUNT:1 byte ][ PAYLOAD ] * COUNT
+      [ 0xDE 0xAD 0xBE 0xEF ][ COUNT:1 byte ][MSG_ID:2 bytes][ PAYLOAD ] * COUNT
 
 - The payload is a *packed* C struct defined in a header file.
 - PlotJuggler with the WebSocket Server plugin enabled (Protocol: JSON).
@@ -107,52 +107,30 @@ Notes:
 
 The project provides two standalone tools for working with telemetry logs:
 
-- **`file-parser`** — converts on-device circular binary log files into NDJSON  
 - **`json-to-csv`** — converts NDJSON into CSV
 
 You can generate JSON logs in one of two ways:
 
-1. Live over TCP, using **`tcp-parser`**  
-2. Offline from stored binary log files, using **`file-parser`**
+1. Live over TCP, using **`stream-parser`**
+2. Offline from stored binary log files, using **`stream-parser`** with --file option
 
 Both paths produce NDJSON (one JSON object per line), which can then be piped into **`json-to-csv`** for analysis in Excel, Pandas, or visualization tools.
 
-### 1. Parsing binary circular log files
+### 1. Converting NDJSON to CSV
 
-Devices store telemetry in fixed-size record slots.  
-`file-parser` reads these slots, applies the struct layout derived from your C header, and streams out JSON.
-
-Example usage:
-
-```bash
-file-parser \
-  --input ~/Downloads/Current.log.2 \
-  --control-file ~/Downloads/Current.control.2 \
-  --struct-header $PATH_TO_STRUCT/telemetry.h \
-  --struct-name telemetry_t \
-  | json-to-csv > telemetry_2.csv
-```
-
-Notes:
-- `--control-file` provides metadata such as record size, checksum size, max-record count, and read/write indices.
-- `--struct-header` and `--struct-name` define the payload layout for unpacking.
-- Output is NDJSON streamed to stdout.
-
-### 2. Converting NDJSON to CSV
-
-`json-to-csv` converts streamed JSON objects into a well-formed CSV file.  
+`json-to-csv` converts streamed JSON objects into a well-formed CSV file.
 All JSON lines must contain the same fields (the parsers ensure this).
 
 Example from a live TCP stream:
 
 ```bash
-tcp-parser ... | json-to-csv > live.csv
+stream-parser --host ... | json-to-csv > live.csv
 ```
 
 Example from offline logs:
 
 ```bash
-file-parser ... | json-to-csv > logs.csv
+stream-parser --file ... | json-to-csv > logs.csv
 ```
 
 ## Uninstall
