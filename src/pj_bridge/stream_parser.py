@@ -5,7 +5,7 @@ stream_parser.py
 Connect to a delimiter-framed stream and output NDJSON (one JSON object per line).
 
 Framing supported (default and recommended):
-  [ 0xDE 0xAD 0xBE 0xEF ][ COUNT:1 byte ][ PAYLOAD ] * COUNT
+  [ 0xDE 0xAD 0xBE 0xEF ][ COUNT:1 byte ][ MSG_ID: 2 bytes][ PAYLOAD ] * COUNT
 
 Where PAYLOAD is a fixed-size packed C struct derived from your header file.
 
