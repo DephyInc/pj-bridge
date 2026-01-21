@@ -5,8 +5,8 @@ socket_client.py
 Read NDJSON lines (one JSON object per line) from stdin or a file and forward
 each line to PlotJuggler's WebSocket Server as a text message.
 
-Typical usage with your tcp_parser:
-  python3 tcp_parser.py ... | python3 socket_client.py --ws-url ws://127.0.0.1:9871
+Typical usage with your stream_parser:
+  python3 stream_parser.py ... | python3 socket_client.py --ws-url ws://127.0.0.1:9871
 
 Or from a saved file:
   python3 socket_client.py --input data.ndjson --ws-url ws://127.0.0.1:9871

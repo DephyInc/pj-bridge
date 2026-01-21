@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-tcp_parser.py
+stream_parser.py
 
-Connect to a delimiter-framed TCP stream and output NDJSON (one JSON object per line).
+Connect to a delimiter-framed stream and output NDJSON (one JSON object per line).
 
 Framing supported (default and recommended):
-  [ 0xDE 0xAD 0xBE 0xEF ][ COUNT:1 byte ][ PAYLOAD ] * COUNT
+  [ 0xDE 0xAD 0xBE 0xEF ][ COUNT:1 byte ][ MSG_ID: 2 bytes][ PAYLOAD ] * COUNT
 
 Where PAYLOAD is a fixed-size packed C struct derived from your header file.
 
 Examples:
 
-  python3 tcp_parser.py \
+  python3 _parser.py \
     --host 192.168.1.91 \
     --port 5000 \
     --delimiter 0xDEADBEEF \
@@ -138,7 +138,7 @@ class DelimitedRecordParser:
     def parse_buffer(self, buf: bytes) -> Tuple[List[str], bytes]:
         """
         Scan the buffer for frames and return (list_of_json_strings, leftover_bytes).
-        Robust to split delimiters and partial batches across TCP chunks.
+        Robust to split delimiters and partial batches across chunks.
         """
         msgs: List[str] = []
         d = self.delim
@@ -159,19 +159,26 @@ class DelimitedRecordParser:
             after_delim = pos + dlen
 
             if self.counted_batch:
-                # Need at least 1 byte for COUNT
-                if after_delim + 1 > blen:
+                # Need at least 1 byte COUNT + 2 bytes message_id
+                header_size = 1 + 2  # COUNT + message_id
+
+                if after_delim + header_size > blen:
                     # Not enough data yet; keep from this delimiter
                     return msgs, buf[pos:]
+
                 count = buf[after_delim]
+
+                # Read 2-byte message_id (little-endian unsigned)
+                msg_id_offset = after_delim + 1
+                message_id = struct.unpack_from("<H", buf, msg_id_offset)[0]
+
                 # Sanity check
                 if count == 0:
-                    # Nothing to parse this batch; skip delimiter + count
-                    i = after_delim + 1
+                    # Skip delimiter + COUNT + message_id
+                    i = after_delim + header_size
                     continue
+
                 if count > self.max_frames_per_batch:
-                    # Likely noise or corruption; skip this delimiter
-                    # Move forward by 1 to rescan for next delimiter
                     log.debug(
                         "batch count %d > max_frames_per_batch %d; skipping",
                         count,
@@ -180,30 +187,37 @@ class DelimitedRecordParser:
                     i = pos + 1
                     continue
 
-                # Total bytes needed after COUNT
+                # Total bytes needed after COUNT + message_id
                 total_payload_bytes = count * self.rec_size
-                end_needed = after_delim + 1 + total_payload_bytes
+                end_needed = after_delim + header_size + total_payload_bytes
+
                 if end_needed > blen:
                     # Wait for more data; keep from this delimiter
                     return msgs, buf[pos:]
 
-                # We have a full batch; decode each payload
-                start_payloads = after_delim + 1
+                # Decode each payload
+                start_payloads = after_delim + header_size
                 offset = start_payloads
+
                 for _ in range(count):
                     payload = buf[offset : offset + self.rec_size]
                     try:
-                        msgs.append(self._decode_payload_to_json(payload))
+                        json_msg = self._decode_payload_to_json(payload)
+
+                        # Attach message_id
+                        obj = json.loads(json_msg)
+                        obj["message_id"] = message_id
+                        msgs.append(json.dumps(obj, separators=(",", ":")))
+
                     except (struct.error, ValueError) as e:
-                        # Skip malformed record and continue batch
                         log.debug("malformed record skipped: %s", e)
+
                     offset += self.rec_size
 
                 # Advance i past the whole batch
                 i = end_needed
                 # Continue scanning for the next delimiter
                 continue
-
             else:
                 # Single payload mode: [DELIM][PAYLOAD]
                 start_payload = after_delim
@@ -219,6 +233,39 @@ class DelimitedRecordParser:
                 else:
                     # Not enough bytes yet
                     return msgs, buf[pos:]
+
+
+def file_reader_to_stdout(
+    path: str,
+    read_bytes: int,
+    parser: DelimitedRecordParser,
+):
+    """
+    Read binary data from file, parse frames, write JSON lines to stdout.
+    """
+    leftover = b""
+    log = logging.getLogger("pj_bridge")
+
+    try:
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(read_bytes)
+                if not chunk:
+                    break
+
+                buf = leftover + chunk
+                msgs, leftover = parser.parse_buffer(buf)
+
+                for m in msgs:
+                    sys.stdout.write(m)
+                    sys.stdout.write("\n")
+
+        sys.stdout.flush()
+        log.info("file processing completed: %s", path)
+
+    except Exception as e:
+        log.error("file reader failed: %s", e)
+        sys.exit(1)
 
 
 def run(args):
@@ -273,12 +320,16 @@ def run(args):
 
 def parse_args():
     ap = argparse.ArgumentParser(
-        description="Parse a delimiter + count framed TCP binary stream into JSON "
+        description="Parse a delimiter + count framed binary stream into JSON "
         + "(NDJSON to stdout)."
     )
 
+    # Input source (mutually exclusive)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--host", help="Device host, e.g. 192.168.1.91")
+    src.add_argument("--file", help="Path to local .bin file with captured stream")
+
     # TCP (short flags)
-    ap.add_argument("--host", required=True, help="Device host")
     ap.add_argument("--port", type=int, default=5000, help="Device TCP port")
     ap.add_argument("--recv-bytes", type=int, default=8192, help="recv() size")
     ap.add_argument("--retry-sec", type=float, default=2.0, help="reconnect delay")
@@ -333,6 +384,38 @@ def _setup_logging():
 
 def main():
     _setup_logging()
+
+    args = parse_args()
+
+    # 🚨 FILE MODE: stdout only, no asyncio, no WS
+    if args.file:
+        # Derive struct layout from the header
+        struct_fmt, fields = derive_struct(
+            header_path=args.struct_header,
+            struct_name=args.struct_name,
+            endian=args.endian,
+            packed=True if args.packed else False,
+        )
+
+        delimiter = parse_hex_u32(args.delimiter)
+        parser = DelimitedRecordParser(
+            struct_fmt=struct_fmt,
+            fields=fields,
+            ts_field=args.ts_field,
+            ts_scale=args.ts_scale,
+            name_prefix=args.name_prefix,
+            delimiter=delimiter,
+            counted_batch=(not args.no_counted_batch),
+            max_frames_per_batch=args.max_frames_per_batch,
+        )
+        file_reader_to_stdout(
+            path=args.file,
+            read_bytes=args.recv_bytes,
+            parser=parser,
+        )
+        return
+
+    # 🌐 TCP MODE
     try:
         run(parse_args())
     except KeyboardInterrupt:
