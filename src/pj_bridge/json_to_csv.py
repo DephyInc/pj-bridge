@@ -25,13 +25,11 @@ import argparse
 import csv
 import json
 import sys
-from typing import Dict, List, Any
+from typing import List
 
 
 def parse_args() -> argparse.Namespace:
-    ap = argparse.ArgumentParser(
-        description="Convert NDJSON from stdin into CSV on stdout."
-    )
+    ap = argparse.ArgumentParser(description="Convert NDJSON from stdin into CSV on stdout.")
     ap.add_argument(
         "--no-header",
         action="store_true",

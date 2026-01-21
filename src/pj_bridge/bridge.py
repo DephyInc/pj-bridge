@@ -45,7 +45,12 @@ except Exception:
     raise
 
 try:
-    from .stream_parser import DelimitedRecordParser, connect_tcp, parse_hex_u32, file_reader_to_stdout
+    from .stream_parser import (
+        DelimitedRecordParser,
+        connect_tcp,
+        file_reader_to_stdout,
+        parse_hex_u32,
+    )
 except Exception:
     print(
         "error: could not import from stream_parser. Ensure stream_parser.py is present.",
@@ -218,6 +223,7 @@ def _setup_logging():
         level=logging.INFO,  # change to DEBUG to see skipped-record details
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
 
 def main():
     _setup_logging()
