@@ -45,7 +45,7 @@ except Exception:
     raise
 
 try:
-    from .stream_parser import DelimitedRecordParser, connect_tcp, parse_hex_u32
+    from .stream_parser import DelimitedRecordParser, connect_tcp, parse_hex_u32, file_reader_to_stdout
 except Exception:
     print(
         "error: could not import from stream_parser. Ensure stream_parser.py is present.",
@@ -104,39 +104,6 @@ async def tcp_reader_to_queue(
                 logging.getLogger("pj_bridge").warning("unexpected error on socket close: %s", e)
 
             await asyncio.sleep(retry_sec)
-
-
-def file_reader_to_stdout(
-    path: str,
-    read_bytes: int,
-    parser: DelimitedRecordParser,
-):
-    """
-    Read binary data from file, parse frames, write JSON lines to stdout.
-    """
-    leftover = b""
-    log = logging.getLogger("pj_bridge")
-
-    try:
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(read_bytes)
-                if not chunk:
-                    break
-
-                buf = leftover + chunk
-                msgs, leftover = parser.parse_buffer(buf)
-
-                for m in msgs:
-                    sys.stdout.write(m)
-                    sys.stdout.write("\n")
-
-        sys.stdout.flush()
-        log.info("file processing completed: %s", path)
-
-    except Exception as e:
-        log.error("file reader failed: %s", e)
-        sys.exit(1)
 
 
 def parse_args():

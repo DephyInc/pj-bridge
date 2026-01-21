@@ -235,6 +235,39 @@ class DelimitedRecordParser:
                     return msgs, buf[pos:]
 
 
+def file_reader_to_stdout(
+    path: str,
+    read_bytes: int,
+    parser: DelimitedRecordParser,
+):
+    """
+    Read binary data from file, parse frames, write JSON lines to stdout.
+    """
+    leftover = b""
+    log = logging.getLogger("pj_bridge")
+
+    try:
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(read_bytes)
+                if not chunk:
+                    break
+
+                buf = leftover + chunk
+                msgs, leftover = parser.parse_buffer(buf)
+
+                for m in msgs:
+                    sys.stdout.write(m)
+                    sys.stdout.write("\n")
+
+        sys.stdout.flush()
+        log.info("file processing completed: %s", path)
+
+    except Exception as e:
+        log.error("file reader failed: %s", e)
+        sys.exit(1)
+
+
 def run(args):
     # Derive struct format and labels from header
     struct_fmt, fields = derive_struct(
@@ -291,8 +324,12 @@ def parse_args():
         + "(NDJSON to stdout)."
     )
 
+    # Input source (mutually exclusive)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--host", help="Device host, e.g. 192.168.1.91")
+    src.add_argument("--file", help="Path to local .bin file with captured stream")
+
     # TCP (short flags)
-    ap.add_argument("--host", required=True, help="Device host")
     ap.add_argument("--port", type=int, default=5000, help="Device TCP port")
     ap.add_argument("--recv-bytes", type=int, default=8192, help="recv() size")
     ap.add_argument("--retry-sec", type=float, default=2.0, help="reconnect delay")
@@ -347,6 +384,39 @@ def _setup_logging():
 
 def main():
     _setup_logging()
+
+
+    args = parse_args()
+
+    # 🚨 FILE MODE: stdout only, no asyncio, no WS
+    if args.file:
+        # Derive struct layout from the header
+        struct_fmt, fields = derive_struct(
+            header_path=args.struct_header,
+            struct_name=args.struct_name,
+            endian=args.endian,
+            packed=True if args.packed else False,
+        )
+
+        delimiter = parse_hex_u32(args.delimiter)
+        parser = DelimitedRecordParser(
+            struct_fmt=struct_fmt,
+            fields=fields,
+            ts_field=args.ts_field,
+            ts_scale=args.ts_scale,
+            name_prefix=args.name_prefix,
+            delimiter=delimiter,
+            counted_batch=(not args.no_counted_batch),
+            max_frames_per_batch=args.max_frames_per_batch,
+        )
+        file_reader_to_stdout(
+            path=args.file,
+            read_bytes=args.recv_bytes,
+            parser=parser,
+        )
+        return
+
+    # 🌐 TCP MODE
     try:
         run(parse_args())
     except KeyboardInterrupt:
