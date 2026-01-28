@@ -72,7 +72,6 @@ async def tcp_reader_to_queue(
     retry_sec: float,
     parser: DelimitedRecordParser,
     q: asyncio.Queue,
-    ignore_errors: bool
 ):
     """
     Receive raw bytes from the device, parse into JSON strings, enqueue them.
@@ -91,13 +90,7 @@ async def tcp_reader_to_queue(
                         raise ConnectionError("EOF")
                     buf = leftover + chunk
 
-                    try:
-                        msgs, leftover = parser.parse_buffer(buf, ignore_errors)
-                    except ValueError as e:
-                        if "payload size mismatch" in str(e):
-                            loop.stop()
-                            return  # exit the function
-                        raise  # all other ValueErrors propagate normally
+                    msgs, leftover = parser.parse_buffer(buf, True)
 
                     for m in msgs:
                         # backpressure: drop oldest if queue grows too large
@@ -160,7 +153,9 @@ def parse_args():
         default=True,
         help="Assume the device struct is packed (no padding). Default true",
     )
-    ap.add_argument("--ignore-errors", action="store_true", help="Ignore parse errors instead of failing")
+    ap.add_argument(
+        "--ignore-errors", action="store_true", help="Ignore parse errors instead of failing"
+    )
 
     # Timestamp and naming
     ap.add_argument("--ts-field", default=None, help="Field with device time (e.g. ts_ms)")
@@ -216,7 +211,6 @@ async def main_async():
                 retry_sec=args.retry_sec,
                 parser=parser,
                 q=q,
-                ignore_errors=args.ignore_errors
             )
         )
     )
@@ -269,7 +263,7 @@ def main():
             path=args.file,
             read_bytes=args.recv_bytes,
             parser=parser,
-            ignore_errors=args.ignore_errors
+            ignore_errors=args.ignore_errors,
         )
         return
 

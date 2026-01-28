@@ -63,7 +63,9 @@ def normalize_ws(s: str) -> str:
     return " ".join(s.strip().split())
 
 
-def parse_declarations(block: str, controller_out_size: int | None = None) -> List[Tuple[str, str, int]]:
+def parse_declarations(
+    block: str, controller_out_size: int | None = None
+) -> List[Tuple[str, str, int]]:
     """
     Return a list of (ctype, name, array_len) from the struct body block.
 
@@ -84,7 +86,7 @@ def parse_declarations(block: str, controller_out_size: int | None = None) -> Li
 
         # Remove any leading struct keywords
         if line.startswith("struct "):
-            line = line[len("struct "):]
+            line = line[len("struct ") :]
 
         # Match "<ctype> names..."
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_ \t]*)\s+(.+)$", line)
@@ -117,7 +119,10 @@ def parse_declarations(block: str, controller_out_size: int | None = None) -> Li
                 ln = 1
                 if ctype_raw.casefold() == "HiddenHighLevelControllerOutputData_s".casefold():
                     if controller_out_size is None:
-                        raise ValueError(f"Must specify controller-out-size if using HiddenHighLevelControllerOutputData_s type")
+                        raise ValueError(
+                            "Must specify controller-out-size if using "
+                            "HiddenHighLevelControllerOutputData_s type"
+                        )
                     else:
                         ln = controller_out_size
             decls.append((ctype_raw, nm, ln))
@@ -197,7 +202,11 @@ def find_typedef_struct_body(code: str, struct_name: str) -> str:
 
 
 def derive_struct(
-    header_path: str, struct_name: str, endian: str, packed: bool, controller_out_size: int | None = None
+    header_path: str,
+    struct_name: str,
+    endian: str,
+    packed: bool,
+    controller_out_size: int | None = None,
 ) -> Tuple[str, List[str]]:
     """
     Return (fmt, labels) for the given typedef struct in header_path.
@@ -281,7 +290,13 @@ def main() -> None:
     args = ap.parse_args()
 
     try:
-        fmt, labels = derive_struct(args.header, args.struct_name, args.endian, args.packed, args.controller_out_size if args.controller_out_size else None)
+        fmt, labels = derive_struct(
+            args.header,
+            args.struct_name,
+            args.endian,
+            args.packed,
+            args.controller_out_size if args.controller_out_size else None,
+        )
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(2)

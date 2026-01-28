@@ -114,7 +114,6 @@ class DelimitedRecordParser:
         if len(struct.unpack(self.struct_fmt, dummy)) != len(self.fields):
             raise ValueError("fields do not match struct format item count")
 
-
     def _decode_payload_to_json(self, payload: bytes) -> str:
         vals = struct.unpack(self.struct_fmt, payload)
         data = dict(zip(self.fields, vals))
@@ -136,7 +135,6 @@ class DelimitedRecordParser:
             out[name] = v
         return json.dumps(out, separators=(",", ":"), ensure_ascii=False)
 
-
     def parse_buffer(self, buf: bytes, ignore_errors: bool) -> Tuple[List[str], bytes]:
         """
         Scan the buffer for frames and return (list_of_json_strings, leftover_bytes).
@@ -151,6 +149,7 @@ class DelimitedRecordParser:
         blen = len(buf)
 
         while True:
+            # Find delimiter
             pos = buf.find(d, i)
             if pos < 0:
                 keep_from = max(blen - (dlen - 1), 0)
@@ -174,9 +173,26 @@ class DelimitedRecordParser:
                     if not ignore_errors:
                         raise ValueError("frame shorter than header")
 
+                # Read 2-byte message_id (little-endian unsigned)
                 count = buf[after_delim]
                 message_id = struct.unpack_from("<H", buf, after_delim + 1)[0]
 
+                # Sanity checks
+                if count == 0:
+                    # Skip delimiter + COUNT + message_id
+                    i = next_pos
+                    continue
+
+                if count > self.max_frames_per_batch:
+                    log.debug(
+                        "batch count %d > max_frames_per_batch %d; skipping",
+                        count,
+                        self.max_frames_per_batch,
+                    )
+                    i = next_pos
+                    continue
+
+                # Check the expected vs actual sizes
                 expected_payload = count * self.rec_size
                 actual_payload = frame_len - header_size
 
@@ -189,7 +205,10 @@ class DelimitedRecordParser:
                     )
                     if not ignore_errors:
                         raise ValueError("batch payload size mismatch")
+                    i = next_pos
+                    continue
 
+                # Decode payload
                 offset = after_delim + header_size
                 for _ in range(count):
                     payload = buf[offset : offset + self.rec_size]
@@ -216,6 +235,8 @@ class DelimitedRecordParser:
                     )
                     if not ignore_errors:
                         raise ValueError("single payload size mismatch")
+                    i = next_pos
+                    continue
 
                 payload = buf[after_delim:next_pos]
                 try:
@@ -226,11 +247,9 @@ class DelimitedRecordParser:
                 i = next_pos
                 continue
 
+
 def file_reader_to_stdout(
-    path: str,
-    read_bytes: int,
-    parser: DelimitedRecordParser,
-    ignore_errors: bool
+    path: str, read_bytes: int, parser: DelimitedRecordParser, ignore_errors: bool
 ):
     """
     Read binary data from file, parse frames, write JSON lines to stdout.
@@ -348,7 +367,9 @@ def parse_args():
         default=64,
         help="Sanity cap for COUNT to ignore corrupted batches",
     )
-    ap.add_argument("--ignore-errors", action="store_true", help="Ignore parse errors instead of failing")
+    ap.add_argument(
+        "--ignore-errors", action="store_true", help="Ignore parse errors instead of failing"
+    )
 
     # Struct derivation
     ap.add_argument("--struct-header", required=True, help="Path to C header")
@@ -416,7 +437,7 @@ def main():
             path=args.file,
             read_bytes=args.recv_bytes,
             parser=parser,
-            ignore_errors=args.ignore_errors
+            ignore_errors=args.ignore_errors,
         )
         return
 
