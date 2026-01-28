@@ -106,7 +106,6 @@ def parse_declarations(block: str, controller_out_size: int | None = None) -> Li
                 continue
 
             # Array?
-            # sys.stderr.write(f"{namepart}\n")
             ln = 1
             arrm = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*(\d+)\s*\]$", namepart)
             if arrm:

@@ -384,7 +384,6 @@ def _setup_logging():
         level=logging.INFO,  # change to DEBUG to see skipped-record details
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    log = logging.getLogger("pj_bridge")
 
 
 def main():

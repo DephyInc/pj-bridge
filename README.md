@@ -47,7 +47,6 @@ python3 bridge.py \
   --host 192.168.1.91 \
   --struct-header /path/to/telemetry.h \
   --struct-name MyStruct \
-  --controller-out-size MySize \
   --name-prefix "device_a."
 ```
 
@@ -67,7 +66,6 @@ Notes:
   python3 derive_struct.py \
     --header /path/to/telemetry.h \
     --struct-name MyStruct \
-    --controller-out-size MySize \
   ```
 
 1) Parse from device to NDJSON:
@@ -77,14 +75,13 @@ Notes:
    --host 192.168.1.91 \
    --struct-header /path/to/telemetry.h \
    --struct-name MyStruct \
-   --controller-out-size MySize \
    --name-prefix "device_a."
   ```
 
 2) Forward NDJSON to PlotJuggler:
 
   ```bash
-  python3 stream_parser.py --host 192.168.1.91 --struct-header /path/to/telemetry.h --struct-name MyStruct --controller-out-size MySize | python3 socket_client.py --ws-url ws://127.0.0.1:9871
+  python3 stream_parser.py --host 192.168.1.91 --struct-header /path/to/telemetry.h --struct-name MyStruct | python3 socket_client.py --ws-url ws://127.0.0.1:9871
   ```
 
 ## Field naming
