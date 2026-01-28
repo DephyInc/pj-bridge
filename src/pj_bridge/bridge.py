@@ -72,6 +72,7 @@ async def tcp_reader_to_queue(
     retry_sec: float,
     parser: DelimitedRecordParser,
     q: asyncio.Queue,
+    ignore_errors: bool
 ):
     """
     Receive raw bytes from the device, parse into JSON strings, enqueue them.
@@ -89,7 +90,15 @@ async def tcp_reader_to_queue(
                     if not chunk:
                         raise ConnectionError("EOF")
                     buf = leftover + chunk
-                    msgs, leftover = parser.parse_buffer(buf)
+
+                    try:
+                        msgs, leftover = parser.parse_buffer(buf, ignore_errors)
+                    except ValueError as e:
+                        if "payload size mismatch" in str(e):
+                            loop.stop()
+                            return  # exit the function
+                        raise  # all other ValueErrors propagate normally
+
                     for m in msgs:
                         # backpressure: drop oldest if queue grows too large
                         if q.qsize() > 10000:
