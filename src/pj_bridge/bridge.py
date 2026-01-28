@@ -21,6 +21,7 @@ Example:
     --delimiter 0xDEADBEEF \
     --struct-header /path/to/telemetry.h \
     --struct-name MyRecord \
+    --controller-out-size 109 \
     --endian "<" \
     --ts-field ts_ms \
     --ts-scale 1e-3 \
@@ -143,6 +144,7 @@ def parse_args():
     # Struct derivation
     ap.add_argument("--struct-header", required=True, help="Path to C header")
     ap.add_argument("--struct-name", required=True, help="Typedef struct name")
+    ap.add_argument("--controller-out-size", type=int, help="Controller output size")
     ap.add_argument("--endian", choices=["<", ">", "="], default="<")
     ap.add_argument(
         "--packed",
@@ -150,6 +152,7 @@ def parse_args():
         default=True,
         help="Assume the device struct is packed (no padding). Default true",
     )
+    ap.add_argument("--ignore-errors", action="store_true", help="Ignore parse errors instead of failing")
 
     # Timestamp and naming
     ap.add_argument("--ts-field", default=None, help="Field with device time (e.g. ts_ms)")
@@ -173,6 +176,7 @@ async def main_async():
     struct_fmt, fields = derive_struct(
         header_path=args.struct_header,
         struct_name=args.struct_name,
+        controller_out_size=args.controller_out_size if args.controller_out_size else None,
         endian=args.endian,
         packed=True if args.packed else False,
     )
@@ -204,6 +208,7 @@ async def main_async():
                 retry_sec=args.retry_sec,
                 parser=parser,
                 q=q,
+                ignore_errors=args.ignore_errors
             )
         )
     )
@@ -233,6 +238,7 @@ def main():
     struct_fmt, fields = derive_struct(
         header_path=args.struct_header,
         struct_name=args.struct_name,
+        controller_out_size=args.controller_out_size if args.controller_out_size else None,
         endian=args.endian,
         packed=True if args.packed else False,
     )
@@ -255,6 +261,7 @@ def main():
             path=args.file,
             read_bytes=args.recv_bytes,
             parser=parser,
+            ignore_errors=args.ignore_errors
         )
         return
 

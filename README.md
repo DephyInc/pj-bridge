@@ -47,10 +47,14 @@ python3 bridge.py \
   --host 192.168.1.91 \
   --struct-header /path/to/telemetry.h \
   --struct-name MyStruct \
+  --controller-out-size MySize \
   --name-prefix "device_a."
 ```
 
 Notes:
+- Add `--controller-out-size` if using a struct with `HiddenHighLevelControllerOutputData_s` to specify size (ex: 109)
+  (this is `CONTROLLER_OUTPUT_DATA_SIZE` value in `high_level_controller_common.h`)
+- Add `--ignore-errors` if you think the stream might have corrupted frames but you want to recover instead of stopping
 - Add `--ws-url ws://<pj_host>:9871` if PlotJuggler runs elsewhere.
 - If needed, guard against corrupted batches with `--max-frames-per-batch N`.
 - To fall back to single `[DELIM][PAYLOAD]` (no COUNT), pass `--no-counted-batch`.
@@ -63,22 +67,24 @@ Notes:
   python3 derive_struct.py \
     --header /path/to/telemetry.h \
     --struct-name MyStruct \
+    --controller-out-size MySize \
   ```
 
 1) Parse from device to NDJSON:
 
   ```bash
-  python3 tcp_parser.py \
+  python3 stream_parser.py \
    --host 192.168.1.91 \
    --struct-header /path/to/telemetry.h \
    --struct-name MyStruct \
+   --controller-out-size MySize \
    --name-prefix "device_a."
   ```
 
 2) Forward NDJSON to PlotJuggler:
 
   ```bash
-  python3 tcp_parser.py --host 192.168.1.91 --struct-header /path/to/telemetry.h --struct-name MyStruct | python3 socket_client.py --ws-url ws://127.0.0.1:9871
+  python3 stream_parser.py --host 192.168.1.91 --struct-header /path/to/telemetry.h --struct-name MyStruct --controller-out-size MySize | python3 socket_client.py --ws-url ws://127.0.0.1:9871
   ```
 
 ## Field naming

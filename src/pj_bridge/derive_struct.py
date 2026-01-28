@@ -45,6 +45,7 @@ CTYPE_MAP: Dict[str, str] = {
     "double": "d",
     "bool": "?",
     "char": "b",
+    "HiddenHighLevelControllerOutputData_s": "b",
 }
 
 
@@ -62,7 +63,7 @@ def normalize_ws(s: str) -> str:
     return " ".join(s.strip().split())
 
 
-def parse_declarations(block: str) -> List[Tuple[str, str, int]]:
+def parse_declarations(block: str, controller_out_size: int | None = None) -> List[Tuple[str, str, int]]:
     """
     Return a list of (ctype, name, array_len) from the struct body block.
 
@@ -80,6 +81,10 @@ def parse_declarations(block: str) -> List[Tuple[str, str, int]]:
         line = normalize_ws(raw)
         if not line:
             continue
+
+        # Remove any leading struct keywords
+        if line.startswith("struct "):
+            line = line[len("struct "):]
 
         # Match "<ctype> names..."
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_ \t]*)\s+(.+)$", line)
@@ -101,15 +106,22 @@ def parse_declarations(block: str) -> List[Tuple[str, str, int]]:
                 continue
 
             # Array?
+            # sys.stderr.write(f"{namepart}\n")
+            ln = 1
             arrm = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*(\d+)\s*\]$", namepart)
             if arrm:
                 nm = arrm.group(1)
                 ln = int(arrm.group(2))
-                decls.append((ctype_raw, nm, ln))
             else:
                 # Scalar
                 nm = namepart
-                decls.append((ctype_raw, nm, 1))
+                ln = 1
+                if ctype_raw.casefold() == "HiddenHighLevelControllerOutputData_s".casefold():
+                    if controller_out_size is None:
+                        raise ValueError(f"Must specify controller-out-size if using HiddenHighLevelControllerOutputData_s type")
+                    else:
+                        ln = controller_out_size
+            decls.append((ctype_raw, nm, ln))
 
     return decls
 
@@ -186,7 +198,7 @@ def find_typedef_struct_body(code: str, struct_name: str) -> str:
 
 
 def derive_struct(
-    header_path: str, struct_name: str, endian: str, packed: bool
+    header_path: str, struct_name: str, endian: str, packed: bool, controller_out_size: int | None = None
 ) -> Tuple[str, List[str]]:
     """
     Return (fmt, labels) for the given typedef struct in header_path.
@@ -204,7 +216,7 @@ def derive_struct(
     body = find_typedef_struct_body(code, struct_name)
 
     # Parse declarations inside the struct
-    decls = parse_declarations(body)
+    decls = parse_declarations(body, controller_out_size)
 
     fmt_body = ""
     labels: List[str] = []
@@ -251,6 +263,11 @@ def main() -> None:
         help="Name of the typedef struct to parse " "(for example: bendy_sensor_data_t)",
     )
     ap.add_argument(
+        "--controller-out-size",
+        type=int,
+        help="Size of controller output, which is a part of the struct" "(for example: 109)",
+    )
+    ap.add_argument(
         "--endian",
         choices=["<", ">", "="],
         default="<",
@@ -265,7 +282,7 @@ def main() -> None:
     args = ap.parse_args()
 
     try:
-        fmt, labels = derive_struct(args.header, args.struct_name, args.endian, args.packed)
+        fmt, labels = derive_struct(args.header, args.struct_name, args.endian, args.packed, args.controller_out_size if args.controller_out_size else None)
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(2)
