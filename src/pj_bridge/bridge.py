@@ -21,7 +21,6 @@ Example:
     --delimiter 0xDEADBEEF \
     --struct-header /path/to/telemetry.h \
     --struct-name MyRecord \
-    --controller-out-size 109 \
     --endian "<" \
     --ts-field ts_ms \
     --ts-scale 1e-3 \
