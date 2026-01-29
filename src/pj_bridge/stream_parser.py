@@ -322,7 +322,7 @@ def run(args):
                     if not chunk:
                         raise ConnectionError("EOF")
                     buf = leftover + chunk
-                    msgs, leftover = parser.parse_buffer(buf, args.ignore_errors)
+                    msgs, leftover = parser.parse_buffer(buf, True)
                     for m in msgs:
                         print(m, flush=flush)
                 except socket.timeout:
