@@ -32,6 +32,7 @@ Notes:
 import argparse
 import json
 import logging
+import re
 import socket
 import struct
 import sys
@@ -131,14 +132,16 @@ class DelimitedRecordParser:
         for k, v in data.items():
             if k == self.ts_field:
                 continue
+            if re.match(r"^highLevelControllerData", k, re.IGNORECASE):
+                continue
             name = f"{self.name_prefix}{k}" if self.name_prefix else k
             out[name] = v
         return json.dumps(out, separators=(",", ":"), ensure_ascii=False)
 
-    def parse_buffer(self, buf: bytes) -> Tuple[List[str], bytes]:
+    def parse_buffer(self, buf: bytes, ignore_errors: bool) -> Tuple[List[str], bytes]:
         """
         Scan the buffer for frames and return (list_of_json_strings, leftover_bytes).
-        Robust to split delimiters and partial batches across chunks.
+        Raises ValueError if payload length does not match expected size.
         """
         msgs: List[str] = []
         d = self.delim
@@ -149,33 +152,38 @@ class DelimitedRecordParser:
         blen = len(buf)
 
         while True:
+            # Find delimiter
             pos = buf.find(d, i)
             if pos < 0:
-                # Keep tail to catch split delimiter across boundaries
                 keep_from = max(blen - (dlen - 1), 0)
                 return msgs, buf[keep_from:]
 
-            # We found a delimiter at pos
             after_delim = pos + dlen
 
+            # Find next delimiter to measure payload size
+            next_pos = buf.find(d, after_delim)
+            if next_pos < 0:
+                # Wait for more data
+                return msgs, buf[pos:]
+
+            frame_len = next_pos - after_delim
+
             if self.counted_batch:
-                # Need at least 1 byte COUNT + 2 bytes message_id
                 header_size = 1 + 2  # COUNT + message_id
 
-                if after_delim + header_size > blen:
-                    # Not enough data yet; keep from this delimiter
-                    return msgs, buf[pos:]
-
-                count = buf[after_delim]
+                if frame_len < header_size:
+                    log.error("frame too short (%d bytes)", frame_len)
+                    if not ignore_errors:
+                        raise ValueError("frame shorter than header")
 
                 # Read 2-byte message_id (little-endian unsigned)
-                msg_id_offset = after_delim + 1
-                message_id = struct.unpack_from("<H", buf, msg_id_offset)[0]
+                count = buf[after_delim]
+                message_id = struct.unpack_from("<H", buf, after_delim + 1)[0]
 
-                # Sanity check
+                # Sanity checks
                 if count == 0:
                     # Skip delimiter + COUNT + message_id
-                    i = after_delim + header_size
+                    i = next_pos
                     continue
 
                 if count > self.max_frames_per_batch:
@@ -184,61 +192,67 @@ class DelimitedRecordParser:
                         count,
                         self.max_frames_per_batch,
                     )
-                    i = pos + 1
+                    i = next_pos
                     continue
 
-                # Total bytes needed after COUNT + message_id
-                total_payload_bytes = count * self.rec_size
-                end_needed = after_delim + header_size + total_payload_bytes
+                # Check the expected vs actual sizes
+                expected_payload = count * self.rec_size
+                actual_payload = frame_len - header_size
 
-                if end_needed > blen:
-                    # Wait for more data; keep from this delimiter
-                    return msgs, buf[pos:]
+                if actual_payload != expected_payload:
+                    log.error(
+                        "payload size mismatch: expected %d, got %d (msg_id=%d)",
+                        expected_payload,
+                        actual_payload,
+                        message_id,
+                    )
+                    if not ignore_errors:
+                        raise ValueError("batch payload size mismatch")
+                    i = next_pos
+                    continue
 
-                # Decode each payload
-                start_payloads = after_delim + header_size
-                offset = start_payloads
-
+                # Decode payload
+                offset = after_delim + header_size
                 for _ in range(count):
                     payload = buf[offset : offset + self.rec_size]
                     try:
                         json_msg = self._decode_payload_to_json(payload)
-
-                        # Attach message_id
                         obj = json.loads(json_msg)
                         obj["message_id"] = message_id
                         msgs.append(json.dumps(obj, separators=(",", ":")))
-
-                    except (struct.error, ValueError) as e:
-                        log.debug("malformed record skipped: %s", e)
+                    except struct.error as e:
+                        log.error("malformed record skipped: %s", e)
 
                     offset += self.rec_size
 
-                # Advance i past the whole batch
-                i = end_needed
-                # Continue scanning for the next delimiter
+                i = next_pos
                 continue
+
             else:
-                # Single payload mode: [DELIM][PAYLOAD]
-                start_payload = after_delim
-                end_payload = start_payload + self.rec_size
-                if end_payload <= blen:
-                    payload = buf[start_payload:end_payload]
-                    try:
-                        msgs.append(self._decode_payload_to_json(payload))
-                    except (struct.error, ValueError) as e:
-                        log.debug("malformed record skipped: %s", e)
-                    i = end_payload
+                # Single payload mode
+                if frame_len != self.rec_size:
+                    log.error(
+                        "payload size mismatch: expected %d, got %d",
+                        self.rec_size,
+                        frame_len,
+                    )
+                    if not ignore_errors:
+                        raise ValueError("single payload size mismatch")
+                    i = next_pos
                     continue
-                else:
-                    # Not enough bytes yet
-                    return msgs, buf[pos:]
+
+                payload = buf[after_delim:next_pos]
+                try:
+                    msgs.append(self._decode_payload_to_json(payload))
+                except struct.error as e:
+                    log.error("malformed record skipped: %s", e)
+
+                i = next_pos
+                continue
 
 
 def file_reader_to_stdout(
-    path: str,
-    read_bytes: int,
-    parser: DelimitedRecordParser,
+    path: str, read_bytes: int, parser: DelimitedRecordParser, ignore_errors: bool
 ):
     """
     Read binary data from file, parse frames, write JSON lines to stdout.
@@ -254,11 +268,19 @@ def file_reader_to_stdout(
                     break
 
                 buf = leftover + chunk
-                msgs, leftover = parser.parse_buffer(buf)
+                msgs, leftover = parser.parse_buffer(buf, ignore_errors)
 
                 for m in msgs:
                     sys.stdout.write(m)
                     sys.stdout.write("\n")
+
+        # After reading the entire file, append delimiter to process last leftover
+        if leftover:
+            buf = leftover + parser.delim
+            msgs, leftover = parser.parse_buffer(buf, ignore_errors)
+            for m in msgs:
+                sys.stdout.write(m)
+                sys.stdout.write("\n")
 
         sys.stdout.flush()
         log.info("file processing completed: %s", path)
@@ -273,6 +295,7 @@ def run(args):
     struct_fmt, fields = derive_struct(
         header_path=args.struct_header,
         struct_name=args.struct_name,
+        controller_out_size=args.controller_out_size if args.controller_out_size else None,
         endian=args.endian,
         packed=True if args.packed else False,
     )
@@ -302,7 +325,7 @@ def run(args):
                     if not chunk:
                         raise ConnectionError("EOF")
                     buf = leftover + chunk
-                    msgs, leftover = parser.parse_buffer(buf)
+                    msgs, leftover = parser.parse_buffer(buf, True)
                     for m in msgs:
                         print(m, flush=flush)
                 except socket.timeout:
@@ -331,7 +354,7 @@ def parse_args():
 
     # TCP (short flags)
     ap.add_argument("--port", type=int, default=5000, help="Device TCP port")
-    ap.add_argument("--recv-bytes", type=int, default=8192, help="recv() size")
+    ap.add_argument("--recv-bytes", type=int, default=65536, help="recv() size")
     ap.add_argument("--retry-sec", type=float, default=2.0, help="reconnect delay")
 
     # Framing
@@ -347,9 +370,13 @@ def parse_args():
         default=64,
         help="Sanity cap for COUNT to ignore corrupted batches",
     )
+    ap.add_argument(
+        "--ignore-errors", action="store_true", help="Ignore parse errors instead of failing"
+    )
 
     # Struct derivation
     ap.add_argument("--struct-header", required=True, help="Path to C header")
+    ap.add_argument("--controller-out-size", type=int, help="Controller output size")
     ap.add_argument("--struct-name", required=True, help="Typedef struct name")
     ap.add_argument("--endian", choices=["<", ">", "="], default="<")
     ap.add_argument(
@@ -393,6 +420,7 @@ def main():
         struct_fmt, fields = derive_struct(
             header_path=args.struct_header,
             struct_name=args.struct_name,
+            controller_out_size=args.controller_out_size if args.controller_out_size else None,
             endian=args.endian,
             packed=True if args.packed else False,
         )
@@ -412,6 +440,7 @@ def main():
             path=args.file,
             read_bytes=args.recv_bytes,
             parser=parser,
+            ignore_errors=args.ignore_errors,
         )
         return
 

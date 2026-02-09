@@ -89,7 +89,9 @@ async def tcp_reader_to_queue(
                     if not chunk:
                         raise ConnectionError("EOF")
                     buf = leftover + chunk
-                    msgs, leftover = parser.parse_buffer(buf)
+
+                    msgs, leftover = parser.parse_buffer(buf, True)
+
                     for m in msgs:
                         # backpressure: drop oldest if queue grows too large
                         if q.qsize() > 10000:
@@ -123,7 +125,7 @@ def parse_args():
     src.add_argument("--file", help="Path to local .bin file with captured stream")
 
     ap.add_argument("--port", type=int, default=5000, help="Device TCP port, e.g. 5000")
-    ap.add_argument("--recv-bytes", type=int, default=8192, help="Read chunk size")
+    ap.add_argument("--recv-bytes", type=int, default=65536, help="Read chunk size")
     ap.add_argument("--retry-sec", type=float, default=2.0, help="Reconnect delay (TCP only)")
 
     # Framing
@@ -143,12 +145,16 @@ def parse_args():
     # Struct derivation
     ap.add_argument("--struct-header", required=True, help="Path to C header")
     ap.add_argument("--struct-name", required=True, help="Typedef struct name")
+    ap.add_argument("--controller-out-size", type=int, help="Controller output size")
     ap.add_argument("--endian", choices=["<", ">", "="], default="<")
     ap.add_argument(
         "--packed",
         type=lambda s: s.lower() in ("1", "true", "yes", "y"),
         default=True,
         help="Assume the device struct is packed (no padding). Default true",
+    )
+    ap.add_argument(
+        "--ignore-errors", action="store_true", help="Ignore parse errors instead of failing"
     )
 
     # Timestamp and naming
@@ -173,6 +179,7 @@ async def main_async():
     struct_fmt, fields = derive_struct(
         header_path=args.struct_header,
         struct_name=args.struct_name,
+        controller_out_size=args.controller_out_size if args.controller_out_size else None,
         endian=args.endian,
         packed=True if args.packed else False,
     )
@@ -233,6 +240,7 @@ def main():
     struct_fmt, fields = derive_struct(
         header_path=args.struct_header,
         struct_name=args.struct_name,
+        controller_out_size=args.controller_out_size if args.controller_out_size else None,
         endian=args.endian,
         packed=True if args.packed else False,
     )
@@ -255,6 +263,7 @@ def main():
             path=args.file,
             read_bytes=args.recv_bytes,
             parser=parser,
+            ignore_errors=args.ignore_errors,
         )
         return
 
