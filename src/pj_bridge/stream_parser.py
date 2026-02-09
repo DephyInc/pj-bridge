@@ -32,11 +32,11 @@ Notes:
 import argparse
 import json
 import logging
+import re
 import socket
 import struct
 import sys
 import time
-import re
 from typing import List, Optional, Tuple
 
 # Import derive_struct from sibling module
