@@ -36,6 +36,7 @@ import socket
 import struct
 import sys
 import time
+import re
 from typing import List, Optional, Tuple
 
 # Import derive_struct from sibling module
@@ -130,6 +131,8 @@ class DelimitedRecordParser:
         out = {"t": t_val}
         for k, v in data.items():
             if k == self.ts_field:
+                continue
+            if re.match(r"^highLevelControllerData", k, re.IGNORECASE):
                 continue
             name = f"{self.name_prefix}{k}" if self.name_prefix else k
             out[name] = v
@@ -351,7 +354,7 @@ def parse_args():
 
     # TCP (short flags)
     ap.add_argument("--port", type=int, default=5000, help="Device TCP port")
-    ap.add_argument("--recv-bytes", type=int, default=8192, help="recv() size")
+    ap.add_argument("--recv-bytes", type=int, default=65536, help="recv() size")
     ap.add_argument("--retry-sec", type=float, default=2.0, help="reconnect delay")
 
     # Framing

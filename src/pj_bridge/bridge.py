@@ -125,7 +125,7 @@ def parse_args():
     src.add_argument("--file", help="Path to local .bin file with captured stream")
 
     ap.add_argument("--port", type=int, default=5000, help="Device TCP port, e.g. 5000")
-    ap.add_argument("--recv-bytes", type=int, default=8192, help="Read chunk size")
+    ap.add_argument("--recv-bytes", type=int, default=65536, help="Read chunk size")
     ap.add_argument("--retry-sec", type=float, default=2.0, help="Reconnect delay (TCP only)")
 
     # Framing
