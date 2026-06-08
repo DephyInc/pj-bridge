@@ -262,18 +262,18 @@ def derive_struct(
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description=("Derive Python struct format and field labels " "from a C typedef struct.")
+        description=("Derive Python struct format and field labels from a C typedef struct.")
     )
     ap.add_argument("--header", required=True, help="Path to the C header file")
     ap.add_argument(
         "--struct-name",
         required=True,
-        help="Name of the typedef struct to parse " "(for example: bendy_sensor_data_t)",
+        help="Name of the typedef struct to parse (for example: bendy_sensor_data_t)",
     )
     ap.add_argument(
         "--controller-out-size",
         type=int,
-        help="Size of controller output, which is a part of the struct" "(for example: 109)",
+        help="Size of controller output, which is a part of the struct(for example: 109)",
     )
     ap.add_argument(
         "--endian",
