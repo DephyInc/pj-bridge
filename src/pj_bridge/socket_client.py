@@ -15,8 +15,9 @@ Or from a saved file:
 import argparse
 import asyncio
 import json
+import logging
 import sys
-from typing import Optional
+from typing import Callable, Optional
 
 try:
     import websockets
@@ -68,16 +69,39 @@ async def producer(input_path: Optional[str], q: asyncio.Queue, validate: bool, 
     await q.put(None)
 
 
-async def ws_sender(ws_url: str, q: asyncio.Queue[str], retry_sec: float) -> None:
+def _notify(cb: Optional[Callable[[], None]]) -> None:
+    """Invoke an optional status callback, swallowing its errors so a misbehaving
+    callback can't break the send loop."""
+    if cb is not None:
+        try:
+            cb()
+        except Exception as e:
+            logging.getLogger("pj_bridge").debug("status callback raised: %s", e)
+
+
+async def ws_sender(
+    ws_url: str,
+    q: asyncio.Queue[str],
+    retry_sec: float,
+    on_connect: Optional[Callable[[], None]] = None,
+    on_disconnect: Optional[Callable[[], None]] = None,
+) -> None:
     """
     Connect to PlotJuggler WS server and forward queued messages.
     Reconnect on failure. Stops when producer sends None.
+
+    ``on_connect`` fires each time a connection is (re)established; ``on_disconnect``
+    fires when an established connection drops (not on failed connect attempts).
+    Callbacks run on the event loop, so keep them cheap and thread-marshal any UI work.
     """
     pending: list[str] = []
+    connected = False
     while True:
         try:
             async with websockets.connect(ws_url, max_queue=None) as ws:
+                connected = True
                 print(f"[socket_client] connected to {ws_url}", file=sys.stderr)
+                _notify(on_connect)
                 # flush any pending first
                 for msg in pending:
                     await ws.send(msg)
@@ -97,6 +121,9 @@ async def ws_sender(ws_url: str, q: asyncio.Queue[str], retry_sec: float) -> Non
                 f"[socket_client] WS error: {e}. reconnect in {retry_sec}s",
                 file=sys.stderr,
             )
+            if connected:
+                connected = False
+                _notify(on_disconnect)
             await asyncio.sleep(retry_sec)
 
 
