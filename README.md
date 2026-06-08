@@ -10,6 +10,7 @@ Bridge a delimiter-framed TCP binary stream into JSON over WebSocket for [PlotJu
 - `stream_parser.py` — Connect to the device, parse **[DE AD BE EF][COUNT][MSG_ID][PAYLOAD] × COUNT** batches into NDJSON (one JSON per line).
 - `socket_client.py` — Read NDJSON (stdin or file) and forward to PlotJuggler’s WebSocket Server.
 - `bridge.py` — One-process solution: connect to device, parse, and forward to PlotJuggler (no shell pipes needed) or stdout (if file).
+- `streamer.py` — Library API (`PlotJugglerStreamer`) to run the parse-and-forward pipeline in-process from any byte source (e.g. a serial port), no subprocess or shell pipes.
 
 ## Requirements
 
@@ -83,6 +84,33 @@ Notes:
   ```bash
   python3 stream_parser.py --host 192.168.1.91 --struct-header /path/to/telemetry.h --struct-name MyStruct | python3 socket_client.py --ws-url ws://127.0.0.1:9871
   ```
+
+## Use as a library
+
+The same pipeline is importable, so a host application can supply its own byte
+source instead of TCP or a file. `PlotJugglerStreamer` takes a blocking
+`read_fn() -> bytes` (return `b""` when idle), derives the struct from a header,
+parses `0xDEADBEEF` batches, and forwards JSON to PlotJuggler's WebSocket
+Server on a background thread.
+
+```python
+from pj_bridge import PlotJugglerStreamer
+
+streamer = PlotJugglerStreamer(
+    read_fn=lambda: ser.read(max(1, ser.in_waiting)),  # e.g. a pyserial port
+    struct_header="/path/to/telemetry.h",
+    struct_name="MyStruct",
+    ts_field="timestamp",
+    ws_url="ws://127.0.0.1:9871",
+)
+streamer.start()
+# ...
+streamer.stop()
+```
+
+`stop()` ends the reader and the WebSocket sender even if PlotJuggler's server
+was never up. Other public names: `derive_struct`, `DelimitedRecordParser`,
+`ws_sender`, `source_reader_to_queue`.
 
 ## Field naming
 
