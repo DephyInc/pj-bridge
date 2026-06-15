@@ -112,6 +112,8 @@ class PlotJugglerStreamer:
         counted_batch: bool = True,
         max_frames_per_batch: int = 64,
         retry_sec: float = 2.0,
+        on_connect: Optional[Callable[[], None]] = None,
+        on_disconnect: Optional[Callable[[], None]] = None,
     ) -> None:
         struct_fmt, fields = derive_struct(
             header_path=str(struct_header),
@@ -133,6 +135,8 @@ class PlotJugglerStreamer:
         self._read_fn = read_fn
         self._ws_url = ws_url
         self._retry_sec = retry_sec
+        self._on_connect = on_connect
+        self._on_disconnect = on_disconnect
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -167,7 +171,15 @@ class PlotJugglerStreamer:
         reader = asyncio.create_task(
             source_reader_to_queue(self._read_fn, self._parser, q, stop_event=self._stop_event)
         )
-        sender = asyncio.create_task(ws_sender(self._ws_url, q, self._retry_sec))
+        sender = asyncio.create_task(
+            ws_sender(
+                self._ws_url,
+                q,
+                self._retry_sec,
+                on_connect=self._on_connect,
+                on_disconnect=self._on_disconnect,
+            )
+        )
 
         # The reader exits promptly once stop_event is set and enqueues the
         # None sentinel. If PlotJuggler's server is up, the sender drains the

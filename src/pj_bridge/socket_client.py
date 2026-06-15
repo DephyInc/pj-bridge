@@ -16,10 +16,11 @@ import argparse
 import asyncio
 import json
 import sys
-from typing import Optional
+from typing import Callable, Optional
 
 try:
     import websockets
+    from websockets.exceptions import WebSocketException
 except ImportError:
     print("error: please 'pip install websockets'", file=sys.stderr)
     sys.exit(1)
@@ -43,7 +44,7 @@ async def producer(input_path: Optional[str], q: asyncio.Queue, validate: bool, 
             if validate:
                 try:
                     _ = json.loads(line)
-                except Exception:
+                except json.JSONDecodeError:
                     # Skip invalid lines but keep going
                     print(
                         f"[socket_client] skipped invalid JSON: {line[:120]}",
@@ -68,16 +69,31 @@ async def producer(input_path: Optional[str], q: asyncio.Queue, validate: bool, 
     await q.put(None)
 
 
-async def ws_sender(ws_url: str, q: asyncio.Queue[str], retry_sec: float) -> None:
+async def ws_sender(
+    ws_url: str,
+    q: asyncio.Queue[str],
+    retry_sec: float,
+    on_connect: Optional[Callable[[], None]] = None,
+    on_disconnect: Optional[Callable[[], None]] = None,
+) -> None:
     """
     Connect to PlotJuggler WS server and forward queued messages.
     Reconnect on failure. Stops when producer sends None.
+
+    ``on_connect`` fires each time a connection is (re)established; ``on_disconnect``
+    fires when an established connection drops (not on failed connect attempts).
+    Callbacks run on the event loop, so keep them cheap, non-throwing, and
+    thread-marshal any UI work.
     """
     pending: list[str] = []
+    connected = False
     while True:
         try:
             async with websockets.connect(ws_url, max_queue=None) as ws:
+                connected = True
                 print(f"[socket_client] connected to {ws_url}", file=sys.stderr)
+                if on_connect is not None:
+                    on_connect()
                 # flush any pending first
                 for msg in pending:
                     await ws.send(msg)
@@ -88,15 +104,19 @@ async def ws_sender(ws_url: str, q: asyncio.Queue[str], retry_sec: float) -> Non
                         return
                     try:
                         await ws.send(item)
-                    except Exception as e:
+                    except (OSError, WebSocketException):
                         # keep unsent item for next connect
                         pending.append(item)
-                        raise e
-        except Exception as e:
+                        raise
+        except (OSError, WebSocketException) as e:
             print(
                 f"[socket_client] WS error: {e}. reconnect in {retry_sec}s",
                 file=sys.stderr,
             )
+            if connected:
+                connected = False
+                if on_disconnect is not None:
+                    on_disconnect()
             await asyncio.sleep(retry_sec)
 
 

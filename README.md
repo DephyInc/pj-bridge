@@ -109,8 +109,20 @@ streamer.stop()
 ```
 
 `stop()` ends the reader and the WebSocket sender even if PlotJuggler's server
-was never up. Other public names: `derive_struct`, `DelimitedRecordParser`,
-`ws_sender`, `source_reader_to_queue`.
+was never up. Pass `on_connect` / `on_disconnect` callbacks to be notified when
+the WebSocket link to PlotJuggler is established or drops (they run on the event
+loop, so keep them cheap and marshal any UI work to your own thread):
+
+```python
+PlotJugglerStreamer(
+    ...,
+    on_connect=lambda: print("connected to PlotJuggler"),
+    on_disconnect=lambda: print("PlotJuggler link dropped"),
+)
+```
+
+Other public names: `derive_struct`, `DelimitedRecordParser`, `ws_sender`,
+`source_reader_to_queue`.
 
 ## Field naming
 

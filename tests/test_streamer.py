@@ -6,6 +6,8 @@ import struct
 import threading
 import unittest
 
+import pj_bridge.socket_client as socket_client
+from pj_bridge.socket_client import ws_sender
 from pj_bridge.stream_parser import DelimitedRecordParser
 from pj_bridge.streamer import source_reader_to_queue
 
@@ -93,6 +95,40 @@ class SourceReaderTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(await asyncio.wait_for(q.get(), 2.0))
         await asyncio.wait_for(task, 2.0)
+
+
+class _FakeWS:
+    async def send(self, msg):
+        pass
+
+
+class _FakeConnect:
+    """Async context manager standing in for websockets.connect(...)."""
+
+    def __init__(self, ws):
+        self._ws = ws
+
+    async def __aenter__(self):
+        return self._ws
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class WsSenderCallbackTest(unittest.IsolatedAsyncioTestCase):
+    async def test_on_connect_fires_when_link_established(self):
+        events = []
+        q: asyncio.Queue = asyncio.Queue()
+        await q.put(None)  # stop right after the connection is established
+
+        orig = socket_client.websockets.connect
+        socket_client.websockets.connect = lambda *a, **k: _FakeConnect(_FakeWS())
+        try:
+            await ws_sender("ws://test:9871", q, 0.1, on_connect=lambda: events.append("connected"))
+        finally:
+            socket_client.websockets.connect = orig
+
+        self.assertEqual(events, ["connected"])
 
 
 if __name__ == "__main__":
