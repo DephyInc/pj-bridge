@@ -24,12 +24,15 @@ Examples:
 
 Notes:
   - Prints one JSON per line to stdout (NDJSON). Flushes by default unless --no-flush.
+  - Pass --csv to write CSV rows instead, skipping the JSON round trip that a
+    '| json-to-csv' pipeline pays for every record.
   - Reconnects on TCP errors.
   - If your device struct is not packed, add packing on the device or extend the fmt
     with explicit padding.
 """
 
 import argparse
+import csv
 import json
 import logging
 import re
@@ -37,7 +40,7 @@ import socket
 import struct
 import sys
 import time
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Import derive_struct from sibling module
 try:
@@ -115,7 +118,7 @@ class DelimitedRecordParser:
         if len(struct.unpack(self.struct_fmt, dummy)) != len(self.fields):
             raise ValueError("fields do not match struct format item count")
 
-    def _decode_payload_to_json(self, payload: bytes) -> str:
+    def _decode_payload_to_dict(self, payload: bytes) -> Dict[str, Any]:
         vals = struct.unpack(self.struct_fmt, payload)
         data = dict(zip(self.fields, vals))
 
@@ -128,7 +131,7 @@ class DelimitedRecordParser:
         else:
             t_val = time.time()
 
-        out = {"t": t_val}
+        out: Dict[str, Any] = {"t": t_val}
         for k, v in data.items():
             if k == self.ts_field:
                 continue
@@ -136,14 +139,29 @@ class DelimitedRecordParser:
                 continue
             name = f"{self.name_prefix}{k}" if self.name_prefix else k
             out[name] = v
-        return json.dumps(out, separators=(",", ":"), ensure_ascii=False)
+        return out
 
     def parse_buffer(self, buf: bytes, ignore_errors: bool) -> Tuple[List[str], bytes]:
         """
         Scan the buffer for frames and return (list_of_json_strings, leftover_bytes).
         Raises ValueError if payload length does not match expected size.
         """
-        msgs: List[str] = []
+        recs, leftover = self.parse_buffer_records(buf, ignore_errors)
+        return [json.dumps(r, separators=(",", ":"), ensure_ascii=False) for r in recs], leftover
+
+    def parse_buffer_records(
+        self, buf: bytes, ignore_errors: bool
+    ) -> Tuple[List[Dict[str, Any]], bytes]:
+        """
+        Scan the buffer for frames and return (list_of_record_dicts, leftover_bytes).
+
+        This is the core scanner; ``parse_buffer`` serializes its output to NDJSON.
+        Consumers that render records some other way (e.g. CSV) should use this to
+        avoid a needless JSON round trip.
+
+        Raises ValueError if payload length does not match expected size.
+        """
+        msgs: List[Dict[str, Any]] = []
         d = self.delim
         dlen = len(d)
         log = logging.getLogger("pj_bridge")
@@ -216,10 +234,9 @@ class DelimitedRecordParser:
                 for _ in range(count):
                     payload = buf[offset : offset + self.rec_size]
                     try:
-                        json_msg = self._decode_payload_to_json(payload)
-                        obj = json.loads(json_msg)
-                        obj["message_id"] = message_id
-                        msgs.append(json.dumps(obj, separators=(",", ":")))
+                        rec = self._decode_payload_to_dict(payload)
+                        rec["message_id"] = message_id
+                        msgs.append(rec)
                     except struct.error as e:
                         log.error("malformed record skipped: %s", e)
 
@@ -243,12 +260,65 @@ class DelimitedRecordParser:
 
                 payload = buf[after_delim:next_pos]
                 try:
-                    msgs.append(self._decode_payload_to_json(payload))
+                    msgs.append(self._decode_payload_to_dict(payload))
                 except struct.error as e:
                     log.error("malformed record skipped: %s", e)
 
                 i = next_pos
                 continue
+
+
+class CsvRowWriter:
+    """
+    Write record dicts as CSV rows to a text stream.
+
+    The header is taken from the first record written, matching ``json-to-csv``'s
+    behaviour: all records from one struct share the same keys, and column order
+    follows the order the parser emits them in.
+    """
+
+    def __init__(self, stream, delimiter: str = ",", header: bool = True):
+        self._stream = stream
+        self._delimiter = delimiter
+        self._header = header
+        self._writer: Optional[csv.DictWriter] = None
+
+    def write(self, records: List[Dict[str, Any]]) -> None:
+        for rec in records:
+            if self._writer is None:
+                self._writer = csv.DictWriter(
+                    self._stream,
+                    fieldnames=list(rec.keys()),
+                    delimiter=self._delimiter,
+                    lineterminator="\n",
+                )
+                if self._header:
+                    self._writer.writeheader()
+            self._writer.writerow(rec)
+
+
+def _iter_file_records(
+    path: str, read_bytes: int, parser: DelimitedRecordParser, ignore_errors: bool
+):
+    """
+    Read binary data from file and yield lists of record dicts, chunk by chunk.
+    """
+    leftover = b""
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(read_bytes)
+            if not chunk:
+                break
+
+            msgs, leftover = parser.parse_buffer_records(leftover + chunk, ignore_errors)
+            if msgs:
+                yield msgs
+
+    # After reading the entire file, append delimiter to process last leftover
+    if leftover:
+        msgs, leftover = parser.parse_buffer_records(leftover + parser.delim, ignore_errors)
+        if msgs:
+            yield msgs
 
 
 def file_reader_to_stdout(
@@ -257,30 +327,42 @@ def file_reader_to_stdout(
     """
     Read binary data from file, parse frames, write JSON lines to stdout.
     """
-    leftover = b""
     log = logging.getLogger("pj_bridge")
 
     try:
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(read_bytes)
-                if not chunk:
-                    break
-
-                buf = leftover + chunk
-                msgs, leftover = parser.parse_buffer(buf, ignore_errors)
-
-                for m in msgs:
-                    sys.stdout.write(m)
-                    sys.stdout.write("\n")
-
-        # After reading the entire file, append delimiter to process last leftover
-        if leftover:
-            buf = leftover + parser.delim
-            msgs, leftover = parser.parse_buffer(buf, ignore_errors)
-            for m in msgs:
-                sys.stdout.write(m)
+        for msgs in _iter_file_records(path, read_bytes, parser, ignore_errors):
+            for rec in msgs:
+                sys.stdout.write(json.dumps(rec, separators=(",", ":"), ensure_ascii=False))
                 sys.stdout.write("\n")
+
+        sys.stdout.flush()
+        log.info("file processing completed: %s", path)
+
+    except Exception as e:
+        log.error("file reader failed: %s", e)
+        sys.exit(1)
+
+
+def file_reader_to_csv(
+    path: str,
+    read_bytes: int,
+    parser: DelimitedRecordParser,
+    ignore_errors: bool,
+    delimiter: str = ",",
+    header: bool = True,
+):
+    """
+    Read binary data from file, parse frames, write CSV rows to stdout.
+
+    Equivalent to ``file_reader_to_stdout | json-to-csv`` but without serializing
+    each record to JSON and parsing it back.
+    """
+    log = logging.getLogger("pj_bridge")
+    writer = CsvRowWriter(sys.stdout, delimiter=delimiter, header=header)
+
+    try:
+        for msgs in _iter_file_records(path, read_bytes, parser, ignore_errors):
+            writer.write(msgs)
 
         sys.stdout.flush()
         log.info("file processing completed: %s", path)
@@ -315,6 +397,11 @@ def run(args):
     leftover = b""
     flush = not args.no_flush
     log = logging.getLogger("pj_bridge")
+    csv_writer = (
+        CsvRowWriter(sys.stdout, delimiter=args.csv_delimiter, header=not args.no_header)
+        if args.csv
+        else None
+    )
 
     while True:
         s = connect_tcp(args.host, args.port, args.retry_sec, args.recv_bytes)
@@ -325,9 +412,17 @@ def run(args):
                     if not chunk:
                         raise ConnectionError("EOF")
                     buf = leftover + chunk
-                    msgs, leftover = parser.parse_buffer(buf, True)
-                    for m in msgs:
-                        print(m, flush=flush)
+                    msgs, leftover = parser.parse_buffer_records(buf, True)
+                    if csv_writer is not None:
+                        csv_writer.write(msgs)
+                        if flush:
+                            sys.stdout.flush()
+                    else:
+                        for rec in msgs:
+                            print(
+                                json.dumps(rec, separators=(",", ":"), ensure_ascii=False),
+                                flush=flush,
+                            )
                 except socket.timeout:
                     continue
         except Exception as e:
@@ -398,6 +493,16 @@ def parse_args():
 
     # Output
     ap.add_argument("--no-flush", action="store_true", help="Do not flush stdout on each line")
+    ap.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit CSV instead of NDJSON, skipping the JSON round trip a "
+        + "'| json-to-csv' pipeline pays per record",
+    )
+    ap.add_argument("--csv-delimiter", default=",", help="Column delimiter for --csv (default ',')")
+    ap.add_argument(
+        "--no-header", action="store_true", help="With --csv, do not emit the header row"
+    )
 
     return ap.parse_args()
 
@@ -436,12 +541,22 @@ def main():
             counted_batch=(not args.no_counted_batch),
             max_frames_per_batch=args.max_frames_per_batch,
         )
-        file_reader_to_stdout(
-            path=args.file,
-            read_bytes=args.recv_bytes,
-            parser=parser,
-            ignore_errors=args.ignore_errors,
-        )
+        if args.csv:
+            file_reader_to_csv(
+                path=args.file,
+                read_bytes=args.recv_bytes,
+                parser=parser,
+                ignore_errors=args.ignore_errors,
+                delimiter=args.csv_delimiter,
+                header=not args.no_header,
+            )
+        else:
+            file_reader_to_stdout(
+                path=args.file,
+                read_bytes=args.recv_bytes,
+                parser=parser,
+                ignore_errors=args.ignore_errors,
+            )
         return
 
     # 🌐 TCP MODE
