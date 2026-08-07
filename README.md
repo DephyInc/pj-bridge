@@ -9,7 +9,7 @@ Bridge a delimiter-framed TCP binary stream into JSON over WebSocket for [PlotJu
 - `derive_struct.py` — Parse a C header (`typedef struct { ... } Name;`) and derive the Python `struct` format and expanded field labels.
 - `stream_parser.py` — Connect to the device (or read a `.bin` file), parse **[DE AD BE EF][COUNT][MSG_ID][PAYLOAD] × COUNT** batches into NDJSON (one JSON per line), or into CSV with `--csv`.
 - `socket_client.py` — Read NDJSON (stdin or file) and forward to PlotJuggler’s WebSocket Server.
-- `bridge.py` — One-process solution: connect to device, parse, and forward to PlotJuggler (no shell pipes needed) or stdout (if file).
+- `bridge.py` — One-process solution: connect to device, parse, and forward to PlotJuggler (no shell pipes needed) or stdout (if file, as NDJSON or CSV with `--csv`).
 - `streamer.py` — Library API (`PlotJugglerStreamer`) to run the parse-and-forward pipeline in-process from any byte source (e.g. a serial port), no subprocess or shell pipes.
 
 ## Requirements
@@ -55,6 +55,8 @@ Notes:
 - Add `--controller-out-size` if using a struct with `HiddenHighLevelControllerOutputData_s` to specify size (ex: 109)
   (this is `CONTROLLER_OUTPUT_DATA_SIZE` value in `high_level_controller_common.h`)
 - Add `--ignore-errors` only applies to file conversions, streaming always ignores errors regardless of this flag
+- Add `--csv` with `--file` to write CSV instead of NDJSON (see [Parsing log files](#parsing-log-files)).
+  File conversions only — passing it with `--host` is an error, since TCP mode forwards JSON to PlotJuggler.
 - Add `--ws-url ws://<pj_host>:9871` if PlotJuggler runs elsewhere.
 - If needed, guard against corrupted batches with `--max-frames-per-batch N`.
 - To fall back to single `[DELIM][PAYLOAD]` (no COUNT), pass `--no-counted-batch`.
@@ -166,6 +168,15 @@ stream-parser --file capture.bin --struct-header telemetry.h --struct-name MyStr
 stream-parser --host 192.168.1.91 --struct-header telemetry.h --struct-name MyStruct --csv > live.csv
 ```
 
+`pj-bridge` accepts the same flags for its `--file` mode, so either entry point works:
+
+```bash
+pj-bridge --file capture.bin --struct-header telemetry.h --struct-name MyStruct --csv > logs.csv
+```
+
+With `--host`, `pj-bridge` forwards JSON to PlotJuggler instead, so `--csv` is
+rejected there rather than silently ignored.
+
 Options:
 
 - `--csv-delimiter ';'` to change the column separator (default `,`).
@@ -184,7 +195,7 @@ contain the same fields (the parsers ensure this).
 stream-parser --file capture.bin ... | json-to-csv > logs.csv
 ```
 
-This produces byte-identical output to `--csv`, everyrecord is serialized
+This produces byte-identical output to `--csv`, but every record is serialized
 to JSON, written to a pipe, and parsed back again. Prefer `--csv`
 unless you actually want the NDJSON, for example to feed `socket-client`
 or to inspect individual records.
