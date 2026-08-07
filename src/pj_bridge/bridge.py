@@ -48,6 +48,7 @@ try:
     from .stream_parser import (
         DelimitedRecordParser,
         connect_tcp,
+        file_reader_to_csv,
         file_reader_to_stdout,
         parse_hex_u32,
     )
@@ -169,7 +170,22 @@ def parse_args():
         help="PJ WebSocket Server URL (default ws://127.0.0.1:9871)",
     )
 
-    return ap.parse_args()
+    # Output (--file mode only; TCP mode forwards JSON to PlotJuggler)
+    ap.add_argument(
+        "--csv",
+        action="store_true",
+        help="With --file, write CSV instead of NDJSON, skipping the JSON round "
+        + "trip a '| json-to-csv' pipeline pays per record",
+    )
+    ap.add_argument("--csv-delimiter", default=",", help="Column delimiter for --csv (default ',')")
+    ap.add_argument(
+        "--no-header", action="store_true", help="With --csv, do not emit the header row"
+    )
+
+    args = ap.parse_args()
+    if args.csv and not args.file:
+        ap.error("--csv only applies to --file conversions; TCP mode forwards JSON to PlotJuggler")
+    return args
 
 
 async def main_async():
@@ -259,12 +275,22 @@ def main():
 
     # 🚨 FILE MODE: stdout only, no asyncio, no WS
     if args.file:
-        file_reader_to_stdout(
-            path=args.file,
-            read_bytes=args.recv_bytes,
-            parser=parser,
-            ignore_errors=args.ignore_errors,
-        )
+        if args.csv:
+            file_reader_to_csv(
+                path=args.file,
+                read_bytes=args.recv_bytes,
+                parser=parser,
+                ignore_errors=args.ignore_errors,
+                delimiter=args.csv_delimiter,
+                header=not args.no_header,
+            )
+        else:
+            file_reader_to_stdout(
+                path=args.file,
+                read_bytes=args.recv_bytes,
+                parser=parser,
+                ignore_errors=args.ignore_errors,
+            )
         return
 
     # 🌐 TCP MODE

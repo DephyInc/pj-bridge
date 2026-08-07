@@ -7,9 +7,9 @@ Bridge a delimiter-framed TCP binary stream into JSON over WebSocket for [PlotJu
 ## What’s in this repo
 
 - `derive_struct.py` — Parse a C header (`typedef struct { ... } Name;`) and derive the Python `struct` format and expanded field labels.
-- `stream_parser.py` — Connect to the device, parse **[DE AD BE EF][COUNT][MSG_ID][PAYLOAD] × COUNT** batches into NDJSON (one JSON per line).
+- `stream_parser.py` — Connect to the device (or read a `.bin` file), parse **[DE AD BE EF][COUNT][MSG_ID][PAYLOAD] × COUNT** batches into NDJSON (one JSON per line), or into CSV with `--csv`.
 - `socket_client.py` — Read NDJSON (stdin or file) and forward to PlotJuggler’s WebSocket Server.
-- `bridge.py` — One-process solution: connect to device, parse, and forward to PlotJuggler (no shell pipes needed) or stdout (if file).
+- `bridge.py` — One-process solution: connect to device, parse, and forward to PlotJuggler (no shell pipes needed) or stdout (if file, as NDJSON or CSV with `--csv`).
 - `streamer.py` — Library API (`PlotJugglerStreamer`) to run the parse-and-forward pipeline in-process from any byte source (e.g. a serial port), no subprocess or shell pipes.
 
 ## Requirements
@@ -55,6 +55,8 @@ Notes:
 - Add `--controller-out-size` if using a struct with `HiddenHighLevelControllerOutputData_s` to specify size (ex: 109)
   (this is `CONTROLLER_OUTPUT_DATA_SIZE` value in `high_level_controller_common.h`)
 - Add `--ignore-errors` only applies to file conversions, streaming always ignores errors regardless of this flag
+- Add `--csv` with `--file` to write CSV instead of NDJSON (see [Parsing log files](#parsing-log-files)).
+  File conversions only — passing it with `--host` is an error, since TCP mode forwards JSON to PlotJuggler.
 - Add `--ws-url ws://<pj_host>:9871` if PlotJuggler runs elsewhere.
 - If needed, guard against corrupted batches with `--max-frames-per-batch N`.
 - To fall back to single `[DELIM][PAYLOAD]` (no COUNT), pass `--no-counted-batch`.
@@ -148,33 +150,55 @@ Other public names: `derive_struct`, `DelimitedRecordParser`, `ws_sender`,
 
 ## Parsing log files
 
-The project provides two standalone tools for working with telemetry logs:
+`stream-parser` reads either source and writes to stdout:
 
-- **`json-to-csv`** — converts NDJSON into CSV
+1. Live over TCP, using **`--host`**
+2. Offline from stored binary log files, using **`--file`**
 
-You can generate JSON logs in one of two ways:
+By default it emits NDJSON (one JSON object per line). Add **`--csv`** to get CSV
+directly, ready for Excel, Pandas, or visualization tools.
 
-1. Live over TCP, using **`stream-parser`**
-2. Offline from stored binary log files, using **`stream-parser`** with --file option
-
-Both paths produce NDJSON (one JSON object per line), which can then be piped into **`json-to-csv`** for analysis in Excel, Pandas, or visualization tools.
-
-### 1. Converting NDJSON to CSV
-
-`json-to-csv` converts streamed JSON objects into a well-formed CSV file.
-All JSON lines must contain the same fields (the parsers ensure this).
-
-Example from a live TCP stream:
+### Straight to CSV (recommended)
 
 ```bash
-stream-parser --host ... | json-to-csv > live.csv
+# offline log file
+stream-parser --file capture.bin --struct-header telemetry.h --struct-name MyStruct --csv > logs.csv
+
+# live TCP stream
+stream-parser --host 192.168.1.91 --struct-header telemetry.h --struct-name MyStruct --csv > live.csv
 ```
 
-Example from offline logs:
+`pj-bridge` accepts the same flags for its `--file` mode, so either entry point works:
 
 ```bash
-stream-parser --file ... | json-to-csv > logs.csv
+pj-bridge --file capture.bin --struct-header telemetry.h --struct-name MyStruct --csv > logs.csv
 ```
+
+With `--host`, `pj-bridge` forwards JSON to PlotJuggler instead, so `--csv` is
+rejected there rather than silently ignored.
+
+Options:
+
+- `--csv-delimiter ';'` to change the column separator (default `,`).
+- `--no-header` to omit the header row.
+
+Column order follows the parser's field order, and the header is taken from the
+first record — the same layout `json-to-csv` produces, so existing CSVs stay
+comparable.
+
+### Via NDJSON and `json-to-csv`
+
+`json-to-csv` converts NDJSON on stdin into CSV on stdout. All JSON lines must
+contain the same fields (the parsers ensure this).
+
+```bash
+stream-parser --file capture.bin ... | json-to-csv > logs.csv
+```
+
+This produces byte-identical output to `--csv`, but every record is serialized
+to JSON, written to a pipe, and parsed back again. Prefer `--csv`
+unless you actually want the NDJSON, for example to feed `socket-client`
+or to inspect individual records.
 
 ## Uninstall
 
