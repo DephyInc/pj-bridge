@@ -184,9 +184,9 @@ contain the same fields (the parsers ensure this).
 stream-parser --file capture.bin ... | json-to-csv > logs.csv
 ```
 
-This produces byte-identical output to `--csv`, but is roughly **3x slower**: every
-record is serialized to JSON, written to a pipe, and parsed back again. Prefer
-`--csv` unless you actually want the NDJSON, for example to feed `socket-client`
+This produces byte-identical output to `--csv`, everyrecord is serialized
+to JSON, written to a pipe, and parsed back again. Prefer `--csv`
+unless you actually want the NDJSON, for example to feed `socket-client`
 or to inspect individual records.
 
 ## Uninstall
